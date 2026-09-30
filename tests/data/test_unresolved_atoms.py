@@ -68,7 +68,8 @@ def test_pocket_residues_carry_unobserved_atoms(test_dir):
     assert entry.chains["A"].residues[31].unresolved_atom_names == []
 
 
-def test_ligand_unresolved_atoms_from_records_and_pocket_export(test_dir):
+def test_ligand_unresolved_atoms_from_records_and_pocket_export(test_dir, monkeypatch):
+    monkeypatch.setattr("plinder.data.annotations.ligand_utils.BINDING_AFFINITY", {})
     entry = Entry.from_cif_file(test_dir / CIF_19HC, include_interfaces=False)
     ligands = {
         ligand.asym_id: ligand

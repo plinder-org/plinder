@@ -21,8 +21,11 @@ TSV_DIR = Path(column_descriptions.__file__).parent
 TABLE_TSV_DIR = TSV_DIR / "tables"
 
 _PUBLISHED_INTERFACE_COVER_COLUMN = re.compile(
-    r"(?:interface_qcov__\d+__directed_set_cover|"
-    r"interface_side_qcov__\d+__chain_[12]_directed_set_cover)"
+    r"(?:interface_qcov__\d+__(?:directed_set_cover|reciprocal_component)|"
+    r"interface_side_qcov__\d+__chain_[12]_(?:directed_set_cover|reciprocal_component))"
+)
+_PUBLISHED_LIGAND_COMPONENT_COLUMN = re.compile(
+    r"[^_]+(?:_[^_]+)*__\d+__ligand__reciprocal_component"
 )
 
 DERIVED_COLUMN_DESCRIPTIONS = {
@@ -74,9 +77,10 @@ DERIVED_COLUMN_DESCRIPTIONS = {
         "when the chain could not be clustered"
     ),
     "status": (
-        "Protein clustering outcome: clustered, missing_sequence (MMseqs), "
-        "insufficient_coordinates (Foldseek), or unknown_residues (Foldseek; "
-        "all resolved residues are UNK)"
+        "Protein clustering outcome: clustered, weekly_assigned (searched "
+        "against fixed representatives), missing_sequence (MMseqs), or "
+        "not_in_foldseek_db (Foldseek did not extract this chain from the "
+        "deposited structure)"
     ),
     "chain_is_ligand_like": (
         "Whether this chain is ligand-like rather than an eligible receptor chain"
@@ -434,6 +438,20 @@ def get_cluster_column_descriptions(
                 "each member's query-to-centroid score meets the threshold",
             )
         )
+    component_columns = [
+        column for column in plindex.columns if column.endswith("reciprocal_component")
+    ]
+    for column in component_columns:
+        metric, threshold = column.split("__", maxsplit=2)[:2]
+        rows.append(
+            (
+                column,
+                "str | None",
+                f"Full-graph component at {metric} {threshold} threshold; an edge "
+                "requires similarity in both directions. Connected members may "
+                "be linked through other members rather than directly",
+            )
+        )
     centroid_columns = [
         c
         for c in plindex.columns
@@ -575,7 +593,10 @@ def _validate_published_cover_columns(*, table_name: str, names: list[str]) -> N
         )
         for name in cover_names:
             metric = name.split("__", maxsplit=1)[0]
-            if "__component" in name or "__community" in name:
+            if name.endswith("__reciprocal_component"):
+                if _PUBLISHED_LIGAND_COMPONENT_COLUMN.fullmatch(name) is None:
+                    invalid.append(name)
+            elif "__component" in name or "__community" in name:
                 invalid.append(name)
             elif is_chemical_cluster_metric(metric):
                 # Chemical metrics publish only reciprocal ligand set covers.

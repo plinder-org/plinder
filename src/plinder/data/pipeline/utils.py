@@ -10,6 +10,7 @@ from time import time
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 from omegaconf import DictConfig, OmegaConf
 
@@ -257,6 +258,25 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
     return inner
 
 
+def _reciprocal_component_labels(
+    *, data_dir: Path, entity_type: str, metric: str, threshold: int
+) -> pd.Series:
+    """Read full-graph reciprocal component IDs for one cover threshold."""
+    path = (
+        data_dir
+        / f"{entity_type}_clusters/reductions"
+        / f"metric={metric}/labels/directed=false/threshold={threshold}.parquet"
+    )
+    if not path.is_file():
+        raise FileNotFoundError(f"reciprocal component labels are missing: {path}")
+    node_column = "ligand_id" if entity_type == "ligand" else "system_id"
+    labels = pd.read_parquet(path, columns=[node_column, "label"])
+    labels[node_column] = labels[node_column].astype(str)
+    if labels[node_column].duplicated().any():
+        raise ValueError(f"duplicate nodes in reciprocal component labels: {path}")
+    return labels.set_index(node_column)["label"]
+
+
 def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     """Build one queryable cluster-assignment row per ligand."""
     node_column = "ligand_id"
@@ -404,6 +424,27 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
             )
         aligned = labels.set_index(node_column)["label"].reindex(node_ids)
         cluster_columns[column] = aligned.astype("string[pyarrow]").array
+        component_lookup = _reciprocal_component_labels(
+            data_dir=data_dir,
+            entity_type="ligand",
+            metric=metric,
+            threshold=artifact_threshold,
+        )
+        if is_chemical_cluster_metric(metric):
+            component_nodes = (
+                index.set_index(node_column)["ligand_smiles_id"]
+                .reindex(node_ids)
+                .astype("Int64")
+                .astype("string")
+            )
+        else:
+            component_nodes = pd.Series(node_ids, index=node_ids)
+        components = component_nodes.map(component_lookup)
+        if components.loc[labels[node_column]].isna().any():
+            raise ValueError(f"reciprocal components do not cover {path}")
+        cluster_columns[
+            f"{metric}__{artifact_threshold}__ligand__reciprocal_component"
+        ] = components.astype("string[pyarrow]").array
         summary_column = CHEMICAL_CLUSTER_SUMMARY_COLUMNS.get(metric)
         if (
             summary_column is not None
@@ -612,6 +653,14 @@ def build_interface_cluster_table(
                 f"universe: {path}; missing={missing[:10]}, extra={extra[:10]}"
             )
         label_lookup = labels.set_index(node_column)["label"]
+        component_lookup = _reciprocal_component_labels(
+            data_dir=data_dir,
+            entity_type="interface",
+            metric=metric,
+            threshold=threshold,
+        )
+        if component_lookup.reindex(labels[node_column]).isna().any():
+            raise ValueError(f"reciprocal components do not cover {path}")
         if metric == "interface_side_qcov":
             for side in (1, 2):
                 representative_nodes = membership[
@@ -620,12 +669,22 @@ def build_interface_cluster_table(
                 aligned = representative_nodes.map(label_lookup)
                 column = f"{metric}__{threshold}__chain_{side}_{kind}"
                 cluster_columns[column] = aligned.astype("string[pyarrow]").array
+                components = representative_nodes.map(component_lookup)
+                cluster_columns[
+                    f"{metric}__{threshold}__chain_{side}_reciprocal_component"
+                ] = components.astype("string[pyarrow]").array
         else:
             column = f"{metric}__{threshold}__{kind}"
             aligned = (
                 membership["representative_system_id"].astype(str).map(label_lookup)
             )
             cluster_columns[column] = aligned.astype("string[pyarrow]").array
+            components = (
+                membership["representative_system_id"].astype(str).map(component_lookup)
+            )
+            cluster_columns[f"{metric}__{threshold}__reciprocal_component"] = (
+                components.astype("string[pyarrow]").array
+            )
         if path_index % 10 == 0 or path_index == len(artifacts):
             elapsed = time() - started
             rate = path_index / elapsed
@@ -661,17 +720,6 @@ def add_ligand_similarity_columns(
         raise FileNotFoundError(
             f"missing ligand similarity annotations: {annotation_path}"
         )
-    marker_path = data_dir / "index" / "collation.json"
-    if marker_path.is_file():
-        with marker_path.open() as handle:
-            marker = load(handle)
-        if (
-            marker.get("status") == "requires_downstream_repair"
-            and annotation_path.stat().st_mtime_ns <= marker_path.stat().st_mtime_ns
-        ):
-            raise ValueError(
-                "ligand similarity annotations predate the targeted collation repair"
-            )
     annotations = pd.read_parquet(annotation_path)
     artifact_smiles_column = "ligand_rdkit_canonical_smiles"
     index_smiles_column = "ligand_smiles"
@@ -829,21 +877,44 @@ def _is_interface_cluster_column(column: str) -> bool:
     )
 
 
-def finalize_index(*, data_dir: Path) -> pd.DataFrame:
+def _read_annotation_table(path: Path) -> pd.DataFrame:
+    """Keep nested columns in Arrow storage rather than Python objects."""
+    columns = [name for name in pq.read_schema(path).names if name != "ligand__members"]
+    return pq.read_table(path, columns=columns).to_pandas(
+        types_mapper=lambda dtype: (
+            pd.ArrowDtype(dtype) if pa.types.is_nested(dtype) else None
+        )
+    )
+
+
+def finalize_index(
+    *,
+    data_dir: Path,
+    weekly_ligand_clusters: Path | None = None,
+    weekly_interface_clusters: Path | None = None,
+) -> pd.DataFrame:
     """Publish enriched annotations and separate cluster-assignment tables."""
     started = time()
     index_path = data_dir / "index" / "annotation_table.parquet"
     if not index_path.is_file():
         raise FileNotFoundError(index_path)
     LOG.info("loading annotation index for final enrichment: %s", index_path)
-    index = pd.read_parquet(index_path)
-    index.drop(columns=["uniqueness"], errors="ignore", inplace=True)
+    index = _read_annotation_table(index_path)
+    index.drop(
+        columns=["uniqueness", "system_pass_criteria"], errors="ignore", inplace=True
+    )
     LOG.info("loaded annotation index: rows=%d columns=%d", *index.shape)
     index = add_ligand_3d_score_ability_column(index=index, data_dir=data_dir)
     LOG.info("merged ligand shape-comparability annotations")
     index = add_ligand_similarity_columns(index=index, data_dir=data_dir)
     LOG.info("merged ligand similarity annotations")
-    ligand_clusters = build_ligand_cluster_table(index=index, data_dir=data_dir)
+    ligand_clusters = (
+        pd.read_parquet(weekly_ligand_clusters)
+        if weekly_ligand_clusters is not None
+        else build_ligand_cluster_table(index=index, data_dir=data_dir)
+    )
+    if set(ligand_clusters["ligand_id"]) != set(index["ligand_id"]):
+        raise ValueError("ligand cluster assignments do not cover the annotation table")
     index.drop(
         columns=[column for column in index if _is_ligand_cluster_column(column)],
         inplace=True,
@@ -852,11 +923,16 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
     interface_index: pd.DataFrame | None = None
     interface_clusters: pd.DataFrame | None = None
     if interface_path.is_file():
-        interface_index = pd.read_parquet(interface_path)
-        interface_clusters = build_interface_cluster_table(
-            index=interface_index,
-            data_dir=data_dir,
+        interface_index = _read_annotation_table(interface_path)
+        interface_clusters = (
+            pd.read_parquet(weekly_interface_clusters)
+            if weekly_interface_clusters is not None
+            else build_interface_cluster_table(index=interface_index, data_dir=data_dir)
         )
+        if set(interface_clusters["system_id"]) != set(interface_index["system_id"]):
+            raise ValueError(
+                "interface cluster assignments do not cover the annotation table"
+            )
         interface_index.drop(
             columns=[
                 column
@@ -875,10 +951,20 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
     index_marker_removed = False
     try:
         LOG.info("staging annotation and cluster tables")
-        index.to_parquet(temporary, index=False)
+        pq.write_table(
+            pa.Table.from_pandas(index, preserve_index=False).replace_schema_metadata(
+                None
+            ),
+            temporary,
+        )
         ligand_clusters.to_parquet(temporary_ligand_clusters, index=False)
         if interface_index is not None:
-            interface_index.to_parquet(temporary_interface, index=False)
+            pq.write_table(
+                pa.Table.from_pandas(
+                    interface_index, preserve_index=False
+                ).replace_schema_metadata(None),
+                temporary_interface,
+            )
             assert interface_clusters is not None
             interface_clusters.to_parquet(
                 temporary_interface_clusters,

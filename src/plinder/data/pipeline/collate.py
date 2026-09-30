@@ -67,6 +67,8 @@ RETIRED_ANNOTATION_COLUMNS = frozenset(
         "ligand_rdkit_canonical_smiles",
         "ligand_binding_affinity",
         "system_has_binding_affinity",
+        "system_pass_criteria",
+        "ligand__members",
     }
 )
 SYSTEM_LIGAND_FLAGS = (
@@ -145,6 +147,7 @@ def _raw_annotation_columns_to_keep(columns: Iterable[str]) -> list[str]:
         column
         for column in columns
         if not _is_repeated_entry_column(column)
+        and column != "ligand__members"
         and not any(
             marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS
         )
@@ -805,6 +808,38 @@ def _copy_query(
     )
 
 
+def _merge_parquet_shards(
+    paths: list[Path], output: Path, schema: pa.Schema, *, row_group_size: int
+) -> None:
+    """Write wide annotations in bounded, useful-sized Parquet row groups."""
+
+    def write_pending(writer: pq.ParquetWriter, pending: list[pa.Table]) -> None:
+        if pending:
+            merged = pa.concat_tables(pending)
+            writer.write_table(merged, row_group_size=max(row_group_size, len(merged)))
+
+    with pq.ParquetWriter(output, schema, compression="zstd") as writer:
+        pending: list[pa.Table] = []
+        pending_rows = 0
+        for path in paths:
+            table = pq.read_table(path)
+            columns = [
+                (
+                    table[field.name].cast(field.type, safe=False)
+                    if field.name in table.column_names
+                    else pa.nulls(table.num_rows, type=field.type)
+                )
+                for field in schema
+            ]
+            pending.append(pa.Table.from_arrays(columns, schema=schema))
+            pending_rows += len(table)
+            if pending_rows >= row_group_size:
+                write_pending(writer, pending)
+                pending.clear()
+                pending_rows = 0
+        write_pending(writer, pending)
+
+
 def _copy_query_atomic(
     connection: duckdb.DuckDBPyConnection,
     query: str,
@@ -1037,7 +1072,17 @@ def _collate_entry_metadata(
     row_group_size: int,
 ) -> None:
     """Collate entry metadata with one consistent column set."""
-    tables = [pq.read_table(path) for path in paths]
+    tables = []
+    for path in paths:
+        table = pq.read_table(path)
+        column = "entry_failed_assembly_ids"
+        if column in table.column_names:
+            table = table.set_column(
+                table.schema.get_field_index(column),
+                column,
+                table[column].cast(pa.list_(pa.string())),
+            )
+        tables.append(table)
     if not tables:
         raise ValueError("cannot collate an empty entry-metadata shard")
     columns = set(tables[0].column_names)
@@ -1762,6 +1807,19 @@ def finalize_collation(
             connection.read_parquet(
                 [str(path) for path in paths], union_by_name=True
             ).create_view(f"sharded_{name}", replace=True)
+            if name == "annotation":
+                schema = (
+                    connection.execute("SELECT * FROM sharded_annotation LIMIT 0")
+                    .to_arrow_table()
+                    .schema
+                )
+                _merge_parquet_shards(
+                    paths,
+                    temporary_paths[name],
+                    schema,
+                    row_group_size=row_group_size,
+                )
+                continue
             _copy_query(
                 connection,
                 f"SELECT * FROM sharded_{name} ORDER BY {ENTRY_TABLES[name][1]}",

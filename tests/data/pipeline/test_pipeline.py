@@ -24,11 +24,13 @@ flow:
     pipe.run()
 
 
-def test_pipeline_clusters_whole_interfaces_only():
+def test_pipeline_clusters_whole_and_half_interfaces():
     cfg = config.get_config(cached=False)
     pipe = pipeline.IngestPipeline(conf=cfg)
 
-    assert ("interface", ["interface_qcov"]) in pipe._cluster_entities()
+    assert ("interface", ["interface_qcov", "interface_side_qcov"]) in (
+        pipe._cluster_entities()
+    )
 
 
 def test_make_dbs_creates_the_requested_protein_search_plans(

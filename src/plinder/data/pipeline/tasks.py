@@ -11,12 +11,14 @@ from concurrent.futures import (
     ThreadPoolExecutor,
     wait,
 )
+from errno import EXDEV
 from hashlib import sha256
+from itertools import islice
 from pathlib import Path
 from shutil import copyfile, rmtree
 from string import ascii_lowercase, digits
 from textwrap import dedent
-from typing import Any, Sequence, cast
+from typing import Any, Iterator, Sequence, cast
 
 import pandas as pd
 import pyarrow as pa
@@ -2291,9 +2293,7 @@ def run_batch_searches(
                 for pdb_id in pdb_ids
                 if not any(
                     (
-                        data_dir
-                        / "dbs"
-                        / "subdbs"
+                        (result_database_dir or data_dir / "dbs/subdbs")
                         / f"{search_db}_{alignment_type}"
                         / "aln"
                         / f"{pdb_id}.parquet"
@@ -2313,7 +2313,6 @@ def scatter_missing_alignment_mappings(
     data_dir: Path,
     batch_size: int,
     search_db: str = "holo",
-    publish_alignment_cigars: bool = False,
 ) -> list[list[str]]:
     """Scatter query shards whose raw alignments are not mapped and published."""
     if batch_size < 1:
@@ -2336,9 +2335,6 @@ def scatter_missing_alignment_mappings(
             data_dir=data_dir,
             search_db=search_db,
             shard=shard,
-            publish_alignment_cigars=(
-                publish_alignment_cigars if search_db == "holo" else False
-            ),
         )
     ]
     chunks = [
@@ -2376,7 +2372,7 @@ def _alignment_release_path(
 ) -> Path:
     return (
         data_dir
-        / "alignments"
+        / "alignment_cigars"
         / f"search_db={search_db}"
         / f"alignment_type={alignment_type}"
         / f"shard={shard}.parquet"
@@ -2389,18 +2385,6 @@ def _protein_similarity_score_path(
     return (
         data_dir
         / PROTEIN_SIMILARITY_SCORES_RELATIVE
-        / f"alignment_type={alignment_type}"
-        / f"shard={shard}.parquet"
-    )
-
-
-def _alignment_cigar_path(
-    *, data_dir: Path, search_db: str, alignment_type: str, shard: str
-) -> Path:
-    return (
-        data_dir
-        / "alignment_cigars"
-        / f"search_db={search_db}"
         / f"alignment_type={alignment_type}"
         / f"shard={shard}.parquet"
     )
@@ -2436,9 +2420,9 @@ def alignment_mapping_shard_is_current(
     data_dir: Path,
     shard: str,
     search_db: str = "holo",
-    publish_alignment_cigars: bool | None = None,
+    require_raw_inputs: bool = True,
 ) -> bool:
-    """Validate a shard manifest against raw inputs and published outputs."""
+    """Validate published outputs, and raw inputs when they are retained."""
     manifest_path = _alignment_mapping_manifest_path(
         data_dir=data_dir,
         search_db=search_db,
@@ -2448,25 +2432,24 @@ def alignment_mapping_shard_is_current(
         payload = json.loads(manifest_path.read_text())
     except (OSError, TypeError, ValueError):
         return False
-    inputs = _alignment_input_signatures(
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, dict) or any(
+        not isinstance(signatures, list) for signatures in inputs.values()
+    ):
+        return False
+    if require_raw_inputs and inputs != _alignment_input_signatures(
         data_dir=data_dir,
         search_db=search_db,
         shard=shard,
-    )
+    ):
+        return False
     lookup_signature = _completed_alignment_chain_lookup(data_dir)
     if lookup_signature is None:
         return False
     if (
         payload.get("shard") != shard
         or (search_db != "holo" and payload.get("search_db") != search_db)
-        or payload.get("inputs") != inputs
         or payload.get("alignment_chain_lookup") != lookup_signature
-    ):
-        return False
-    publishes_cigars = payload.get("publish_alignment_cigars")
-    if not isinstance(publishes_cigars, bool) or (
-        publish_alignment_cigars is not None
-        and publishes_cigars != publish_alignment_cigars
     ):
         return False
     outputs = payload.get("outputs")
@@ -2474,9 +2457,6 @@ def alignment_mapping_shard_is_current(
         return False
     protein_score_outputs = payload.get("protein_score_outputs")
     if search_db == "holo" and not isinstance(protein_score_outputs, dict):
-        return False
-    cigar_outputs = payload.get("cigar_outputs")
-    if not isinstance(cigar_outputs, dict):
         return False
     for alignment_type, source_signatures in inputs.items():
         output = _alignment_release_path(
@@ -2493,8 +2473,6 @@ def alignment_mapping_shard_is_current(
                 and protein_score_outputs.get(alignment_type) is not None
             ):
                 return False
-            if publishes_cigars and cigar_outputs.get(alignment_type) is not None:
-                return False
             continue
         if not output.is_file():
             return False
@@ -2503,7 +2481,9 @@ def alignment_mapping_shard_is_current(
         except (OSError, ValueError):
             return False
         if not schemas.release_alignment_mapping_schema_is_current(
-            output_columns, alignment_type=alignment_type
+            output_columns,
+            alignment_type=alignment_type,
+            include_scores=search_db != "holo",
         ):
             return False
         stat = output.stat()
@@ -2530,25 +2510,92 @@ def alignment_mapping_shard_is_current(
                 "mtime_ns": score_stat.st_mtime_ns,
             }:
                 return False
-        if publishes_cigars:
-            cigar_path = _alignment_cigar_path(
-                data_dir=data_dir,
-                search_db=search_db,
-                alignment_type=alignment_type,
-                shard=shard,
-            )
-            if not cigar_path.is_file() or not pq.read_schema(cigar_path).equals(
-                schemas.ALIGNMENT_CIGAR_SCHEMA
-            ):
-                return False
-            cigar_stat = cigar_path.stat()
-            if cigar_outputs.get(alignment_type) != {
-                "name": cigar_path.name,
-                "size": cigar_stat.st_size,
-                "mtime_ns": cigar_stat.st_mtime_ns,
-            }:
-                return False
     return True
+
+
+def _replace_release_alignment_queries(
+    *,
+    old: Path,
+    new: Path,
+    replacements: set[str],
+    scratch_dir: Path,
+    replacement_target_ids: set[str] | None = None,
+) -> None:
+    """Keep old rows outside the changed query or query-target pairs."""
+    if not old.is_file():
+        old.parent.mkdir(parents=True, exist_ok=True)
+        install = old.with_suffix(old.suffix + ".tmp")
+        copyfile(new, install)
+        install.replace(old)
+        return
+    old_schema = pq.read_schema(old)
+    new_schema = pq.read_schema(new)
+    if set(old_schema.names) != set(new_schema.names):
+        raise ValueError(f"incompatible alignment shard columns: {old}, {new}")
+    import duckdb
+
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    temporary = scratch_dir / old.name
+    temporary.unlink(missing_ok=True)
+    connection = duckdb.connect()
+    try:
+        connection.register(
+            "replacement_queries",
+            pd.DataFrame({"query_entry": sorted(replacements)}),
+        )
+        if replacement_target_ids is not None:
+            connection.register(
+                "replacement_targets",
+                pd.DataFrame({"target_entry": sorted(replacement_target_ids)}),
+            )
+        old_sql = old.as_posix().replace("'", "''")
+        new_sql = new.as_posix().replace("'", "''")
+        temporary_sql = temporary.as_posix().replace("'", "''")
+        columns = connection.sql(
+            f"DESCRIBE SELECT * FROM read_parquet('{old_sql}', hive_partitioning=false)"
+        ).fetchall()
+        typed_columns = ", ".join(
+            f'CAST("{name}" AS {dtype}) AS "{name}"' for name, dtype, *_ in columns
+        )
+        retained_condition = (
+            "WHERE NOT EXISTS ("
+            "SELECT 1 FROM replacement_queries AS rq "
+            "JOIN replacement_targets AS rt ON TRUE "
+            "WHERE existing.query_entry = rq.query_entry "
+            "AND existing.target_entry = rt.target_entry)"
+            if replacement_target_ids is not None
+            else "ANTI JOIN replacement_queries USING (query_entry)"
+        )
+        connection.sql(
+            f"""
+            COPY (
+                SELECT {typed_columns}
+                FROM (
+                    SELECT existing.*
+                    FROM read_parquet('{old_sql}', hive_partitioning=false) AS existing
+                    {retained_condition}
+                    UNION ALL BY NAME
+                    SELECT * FROM read_parquet('{new_sql}', hive_partitioning=false)
+                )
+            ) TO '{temporary_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)
+            """
+        )
+    finally:
+        connection.close()
+    if not pq.read_schema(temporary).equals(old_schema):
+        raise ValueError(
+            f"patched alignment shard has an unexpected schema: {old}; "
+            f"expected {old_schema}, got {pq.read_schema(temporary)}"
+        )
+    install = old.with_suffix(old.suffix + ".tmp")
+    try:
+        temporary.replace(install)
+    except OSError as error:
+        if error.errno != EXDEV:
+            raise
+        copyfile(temporary, install)
+        temporary.unlink()
+    install.replace(old)
 
 
 def map_batch_alignments(
@@ -2559,6 +2606,8 @@ def map_batch_alignments(
     force_update: bool,
     scratch_dir: Path | None = None,
     search_db: str = "holo",
+    replacement_query_ids: set[str] | None = None,
+    replacement_target_ids: set[str] | None = None,
 ) -> None:
     """Map raw backend hits directly into atomic query-shard release files."""
     enabled = search_db in scorer_cfg.sub_databases or (
@@ -2567,15 +2616,11 @@ def map_batch_alignments(
     if not enabled:
         raise ValueError(f"alignment database is not enabled: {search_db}")
     maximum_rows = int(getattr(scorer_cfg, "max_alignment_rows_per_query", 5_000_000))
-    publish_cigars = search_db == "holo" and bool(
-        getattr(scorer_cfg, "publish_alignment_cigars", False)
-    )
     for shard in shards:
         if not force_update and alignment_mapping_shard_is_current(
             data_dir=data_dir,
             search_db=search_db,
             shard=shard,
-            publish_alignment_cigars=publish_cigars,
         ):
             LOG.info(
                 "map_batch_alignments: %s shard %s is complete",
@@ -2583,22 +2628,71 @@ def map_batch_alignments(
                 shard,
             )
             continue
-        inputs = _alignment_input_signatures(
+        new_inputs = _alignment_input_signatures(
             data_dir=data_dir,
             search_db=search_db,
             shard=shard,
         )
+        replacing = replacement_query_ids is not None
+        replacements = set(replacement_query_ids or ())
+        old_manifest = _alignment_mapping_manifest_path(
+            data_dir=data_dir, search_db=search_db, shard=shard
+        )
+        if (
+            replacing
+            and not old_manifest.is_file()
+            and any(
+                _alignment_release_path(
+                    data_dir=data_dir,
+                    search_db=search_db,
+                    alignment_type=alignment_type,
+                    shard=shard,
+                ).is_file()
+                for alignment_type in ("foldseek", "mmseqs")
+            )
+        ):
+            raise FileNotFoundError(
+                f"missing existing alignment manifest: {old_manifest}"
+            )
+        old_payload = (
+            json.loads(old_manifest.read_text())
+            if replacing and old_manifest.is_file()
+            else {}
+        )
+        if replacing:
+            for alignment_type, signatures in new_inputs.items():
+                unexpected = {
+                    Path(str(item["name"])).stem for item in signatures
+                }.difference(replacements)
+                if unexpected:
+                    raise ValueError(
+                        f"raw {alignment_type} queries outside replacement set: {sorted(unexpected)}"
+                    )
+        inputs = {
+            alignment_type: sorted(
+                [
+                    item
+                    for item in old_payload.get("inputs", {}).get(alignment_type, [])
+                    if Path(str(item["name"])).stem not in replacements
+                ]
+                + signatures,
+                key=lambda item: str(item["name"]),
+            )
+            if replacing
+            else signatures
+            for alignment_type, signatures in new_inputs.items()
+        }
         pdb_ids = sorted(
             {
                 Path(str(signature["name"])).stem
-                for signatures in inputs.values()
+                for signatures in new_inputs.values()
                 for signature in signatures
             }
         )
-        if not pdb_ids:
+        if not pdb_ids and not replacing:
             continue
         rows_by_query: dict[str, dict[str, int]] = {pdb_id: {} for pdb_id in pdb_ids}
-        for alignment_type, signatures in inputs.items():
+        for alignment_type, signatures in new_inputs.items():
             source_root = (
                 data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
             )
@@ -2634,7 +2728,7 @@ def map_batch_alignments(
         raw_root = data_dir / "dbs" / "subdbs"
         raw_sources = [
             raw_root / f"{search_db}_{alignment_type}" / "aln" / str(signature["name"])
-            for alignment_type, signatures in inputs.items()
+            for alignment_type, signatures in new_inputs.items()
             for signature in signatures
             if Path(str(signature["name"])).stem not in skipped_queries
         ]
@@ -2647,52 +2741,53 @@ def map_batch_alignments(
         if working_root.exists():
             rmtree(working_root)
         mapped_db_dir = working_root / "mapped"
-        scorer, entry_ids, _ = utils.get_scorer(
-            data_dir=data_dir,
-            pdb_ids=mapped_pdb_ids,
-            scorer_cfg=scorer_cfg,
-            load_entries=False,
-            scratch_dir=working_root,
-        )
-        from plinder.core.scores.entries import load_alignment_entry_views
+        if mapped_pdb_ids:
+            scorer, entry_ids, _ = utils.get_scorer(
+                data_dir=data_dir,
+                pdb_ids=mapped_pdb_ids,
+                scorer_cfg=scorer_cfg,
+                load_entries=False,
+                scratch_dir=working_root,
+            )
+            from plinder.core.scores.entries import load_alignment_entry_views
 
-        scorer.entries.update(
-            load_alignment_entry_views(
-                lookup_path=data_dir / ALIGNMENT_CHAIN_LOOKUP_RELATIVE,
-                pdb_ids=mapping_entry_ids,
+            scorer.entries.update(
+                load_alignment_entry_views(
+                    lookup_path=data_dir / ALIGNMENT_CHAIN_LOOKUP_RELATIVE,
+                    pdb_ids=mapping_entry_ids,
+                )
             )
-        )
-        missing_mapping_entries = mapping_entry_ids.difference(scorer.entries)
-        if missing_mapping_entries:
-            raise ValueError(
-                "alignment chain lookup is missing protein entries: "
-                f"{sorted(missing_mapping_entries)[:10]}"
-            )
+            missing_mapping_entries = mapping_entry_ids.difference(scorer.entries)
+            if missing_mapping_entries:
+                raise ValueError(
+                    "alignment chain lookup is missing protein entries: "
+                    f"{sorted(missing_mapping_entries)[:10]}"
+                )
         try:
-            for pdb_id in tqdm(entry_ids):
-                expected = sum(
-                    any(
-                        str(signature["name"]) == f"{pdb_id}.parquet"
-                        for signature in inputs[alignment_type]
+            if mapped_pdb_ids:
+                for pdb_id in tqdm(entry_ids):
+                    expected = sum(
+                        any(
+                            str(signature["name"]) == f"{pdb_id}.parquet"
+                            for signature in new_inputs[alignment_type]
+                        )
+                        for alignment_type in ["foldseek", "mmseqs"]
                     )
-                    for alignment_type in ["foldseek", "mmseqs"]
-                )
-                mapped = scorer.map_alignment_files(
-                    data_dir,
-                    pdb_id,
-                    search_db,
-                    overwrite=True,
-                    scratch_dir=working_root / "temporary",
-                    mapped_db_dir=mapped_db_dir,
-                )
-                if len(mapped) != expected:
-                    raise RuntimeError(
-                        f"{search_db} alignment mapping for {pdb_id} produced "
-                        f"{len(mapped)} of {expected} available backends"
+                    mapped = scorer.map_alignment_files(
+                        data_dir,
+                        pdb_id,
+                        search_db,
+                        overwrite=True,
+                        scratch_dir=working_root / "temporary",
+                        mapped_db_dir=mapped_db_dir,
                     )
+                    if len(mapped) != expected:
+                        raise RuntimeError(
+                            f"{search_db} alignment mapping for {pdb_id} produced "
+                            f"{len(mapped)} of {expected} available backends"
+                        )
             outputs: dict[str, dict[str, int | str] | None] = {}
             protein_score_outputs: dict[str, dict[str, int | str] | None] = {}
-            cigar_outputs: dict[str, dict[str, int | str] | None] = {}
             for alignment_type, source_signatures in inputs.items():
                 target = _alignment_release_path(
                     data_dir=data_dir,
@@ -2709,39 +2804,76 @@ def map_batch_alignments(
                     if search_db == "holo"
                     else None
                 )
-                cigar_target = _alignment_cigar_path(
-                    data_dir=data_dir,
-                    search_db=search_db,
-                    alignment_type=alignment_type,
-                    shard=shard,
-                )
-                if not publish_cigars:
-                    cigar_target.unlink(missing_ok=True)
+                retained = [
+                    signature
+                    for signature in old_payload.get("inputs", {}).get(
+                        alignment_type, []
+                    )
+                    if Path(str(signature["name"])).stem not in replacements
+                ]
+                if (
+                    replacing
+                    and retained
+                    and (
+                        not target.is_file()
+                        or (
+                            protein_scores_target is not None
+                            and not protein_scores_target.is_file()
+                        )
+                    )
+                ):
+                    raise FileNotFoundError(
+                        f"missing retained alignment shard for {search_db} "
+                        f"{alignment_type} {shard}"
+                    )
                 if not source_signatures:
                     target.unlink(missing_ok=True)
                     outputs[alignment_type] = None
                     if protein_scores_target is not None:
                         protein_scores_target.unlink(missing_ok=True)
                         protein_score_outputs[alignment_type] = None
-                    if publish_cigars:
-                        cigar_target.unlink(missing_ok=True)
-                        cigar_outputs[alignment_type] = None
                     continue
                 local_sources = sorted(
                     (
                         mapped_db_dir / f"{search_db}_{alignment_type}" / "mapped_aln"
                     ).glob("*.parquet")
                 )
+                new_target = working_root / "new" / alignment_type / target.name
+                new_protein_scores = (
+                    working_root / "new-protein" / alignment_type / target.name
+                    if protein_scores_target is not None
+                    else None
+                )
                 _write_alignment_release_shard(
                     sources=local_sources,
-                    target=target,
+                    target=new_target if replacing else target,
                     alignment_type=alignment_type,
                     temp_dir=working_root / "collate" / alignment_type,
                     threads=1,
                     memory_limit="7GB",
-                    protein_scores_target=protein_scores_target,
-                    cigar_target=cigar_target if publish_cigars else None,
+                    protein_scores_target=(
+                        new_protein_scores if replacing else protein_scores_target
+                    ),
                 )
+                if replacing:
+                    _replace_release_alignment_queries(
+                        old=target,
+                        new=new_target,
+                        replacements=replacements,
+                        scratch_dir=working_root / "patch" / alignment_type,
+                        replacement_target_ids=replacement_target_ids,
+                    )
+                    if (
+                        protein_scores_target is not None
+                        and new_protein_scores is not None
+                    ):
+                        _replace_release_alignment_queries(
+                            old=protein_scores_target,
+                            new=new_protein_scores,
+                            replacements=replacements,
+                            scratch_dir=working_root / "patch-protein" / alignment_type,
+                            replacement_target_ids=replacement_target_ids,
+                        )
                 stat = target.stat()
                 outputs[alignment_type] = {
                     "name": target.name,
@@ -2754,13 +2886,6 @@ def map_batch_alignments(
                         "name": protein_scores_target.name,
                         "size": score_stat.st_size,
                         "mtime_ns": score_stat.st_mtime_ns,
-                    }
-                if publish_cigars:
-                    cigar_stat = cigar_target.stat()
-                    cigar_outputs[alignment_type] = {
-                        "name": cigar_target.name,
-                        "size": cigar_stat.st_size,
-                        "mtime_ns": cigar_stat.st_mtime_ns,
                     }
             manifest = _alignment_mapping_manifest_path(
                 data_dir=data_dir,
@@ -2778,9 +2903,16 @@ def map_batch_alignments(
                         "inputs": inputs,
                         "outputs": outputs,
                         "protein_score_outputs": protein_score_outputs,
-                        "publish_alignment_cigars": publish_cigars,
-                        "cigar_outputs": cigar_outputs,
-                        "skipped_queries": skipped_queries,
+                        "skipped_queries": {
+                            **{
+                                key: value
+                                for key, value in old_payload.get(
+                                    "skipped_queries", {}
+                                ).items()
+                                if key not in replacements
+                            },
+                            **skipped_queries,
+                        },
                     },
                     indent=2,
                     sort_keys=True,
@@ -3274,7 +3406,25 @@ def collate_ligand_3d_candidates(
         pair_output_is_current = False
         ligand_pair_output_is_current = False
         payload: dict[str, Any] = {}
-        if not patch_existing and output.is_file() and manifest.is_file():
+        expected_inputs = (
+            {
+                "base": "existing packed candidate shard",
+                "replaced_query_ids": replaced_pdb_ids,
+                "replacements": inputs,
+            }
+            if patch_existing
+            else inputs
+        )
+        expected_ligand_pair_inputs = (
+            {
+                "base": "existing packed ligand pair score shard",
+                "replaced_query_ids": replaced_pdb_ids,
+                "replacements": ligand_pair_inputs,
+            }
+            if patch_existing
+            else ligand_pair_inputs
+        )
+        if output.is_file() and manifest.is_file():
             try:
                 payload = json.loads(manifest.read_text())
                 stat = output.stat()
@@ -3286,7 +3436,7 @@ def collate_ligand_3d_candidates(
                 }
                 output_is_current = (
                     payload.get("shard") == shard
-                    and payload.get("inputs") == inputs
+                    and payload.get("inputs") == expected_inputs
                     and payload.get("output") == current_output
                 )
                 if output_is_current and pair_output.is_file():
@@ -3313,7 +3463,7 @@ def collate_ligand_3d_candidates(
                         "rows": pq.ParquetFile(ligand_pair_output).metadata.num_rows,
                     }
                     ligand_pair_output_is_current = (
-                        payload.get("ligand_pair_inputs") == ligand_pair_inputs
+                        payload.get("ligand_pair_inputs") == expected_ligand_pair_inputs
                         and payload.get("ligand_pair_output")
                         == current_ligand_pair_output
                         and pq.read_schema(ligand_pair_output).equals(
@@ -3538,15 +3688,7 @@ def collate_ligand_3d_candidates(
         ligand_pair_output_stat = ligand_pair_output.stat()
         payload = {
             "shard": shard,
-            "inputs": (
-                {
-                    "base": "existing packed candidate shard",
-                    "replaced_query_ids": replaced_pdb_ids,
-                    "replacements": inputs,
-                }
-                if patch_existing
-                else inputs
-            ),
+            "inputs": expected_inputs,
             "output": {
                 "path": str(output.resolve()),
                 "size": output_stat.st_size,
@@ -3559,15 +3701,7 @@ def collate_ligand_3d_candidates(
                 "mtime_ns": pair_output_stat.st_mtime_ns,
                 "rows": pq.ParquetFile(pair_output).metadata.num_rows,
             },
-            "ligand_pair_inputs": (
-                {
-                    "base": "existing packed ligand pair score shard",
-                    "replaced_query_ids": replaced_pdb_ids,
-                    "replacements": ligand_pair_inputs,
-                }
-                if patch_existing
-                else ligand_pair_inputs
-            ),
+            "ligand_pair_inputs": expected_ligand_pair_inputs,
             "ligand_pair_output": {
                 "path": str(ligand_pair_output.resolve()),
                 "size": ligand_pair_output_stat.st_size,
@@ -4112,9 +4246,8 @@ def _write_alignment_release_shard(
     threads: int,
     memory_limit: str,
     protein_scores_target: Path | None = None,
-    cigar_target: Path | None = None,
 ) -> None:
-    """Write mapped residues and compact protein statistics for one query shard."""
+    """Write alignment CIGARs and compact protein statistics for one query shard."""
     import duckdb
 
     con = duckdb.connect()
@@ -4135,14 +4268,17 @@ def _write_alignment_release_shard(
     )
     if protein_scores_temporary is not None:
         protein_scores_temporary.unlink(missing_ok=True)
-    cigar_temporary = (
-        temp_dir / f"cigars-{target.name}" if cigar_target is not None else None
-    )
-    if cigar_temporary is not None:
-        cigar_temporary.unlink(missing_ok=True)
     if non_empty_sources:
         source_sql = ", ".join(f"'{path.as_posix()}'" for path in non_empty_sources)
-        lddt = ", lddt" if alignment_type == "foldseek" else ""
+        metric_sql = (
+            ""
+            if protein_scores_target is not None
+            else (
+                " qcov, tcov, fident, seqsim, "
+                + ("lddt" if alignment_type == "foldseek" else "NULL::DOUBLE")
+                + " AS lddt,"
+            )
+        )
         con.sql(
             dedent(
                 f"""
@@ -4153,24 +4289,20 @@ def _write_alignment_release_shard(
                         query_chain_mapped,
                         target_chain_mapped,
                         source,
-                        qcov,
-                        tcov,
-                        fident,
-                        seqsim,
-                        CAST(query_selected_residue_positions AS USMALLINT[])
-                            AS query_selected_residue_positions,
-                        CAST(target_selected_residue_positions AS USMALLINT[])
-                            AS target_selected_residue_positions,
+                        CAST(qstart AS UINTEGER) AS query_start,
+                        CAST(tstart AS UINTEGER) AS target_start,
+                        cigar::VARCHAR AS cigar,
+                        {metric_sql}
                         CAST(selected_residue_identity_bits AS BLOB)
                             AS selected_residue_identity_bits
-                        {lddt}
                     FROM read_parquet(
                         [{source_sql}], union_by_name = true
                     )
                     ORDER BY query_entry, target_entry,
                              query_chain_mapped, target_chain_mapped, source
                 ) TO '{temporary.as_posix()}'
-                (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100_000);
+                (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 9,
+                 ROW_GROUP_SIZE 500_000);
                 """
             )
         )
@@ -4207,34 +4339,13 @@ def _write_alignment_release_shard(
                     """
                 )
             )
-        if cigar_temporary is not None:
-            con.sql(
-                dedent(
-                    f"""
-                    COPY (
-                        SELECT
-                            query_entry::VARCHAR AS query_entry,
-                            target_entry::VARCHAR AS target_entry,
-                            query_chain_mapped::VARCHAR AS query_chain_mapped,
-                            target_chain_mapped::VARCHAR AS target_chain_mapped,
-                            source::VARCHAR AS source,
-                            CAST(qstart AS UINTEGER) AS query_start,
-                            CAST(tstart AS UINTEGER) AS target_start,
-                            cigar::VARCHAR AS cigar
-                        FROM read_parquet([{source_sql}], union_by_name = true)
-                        ORDER BY query_entry, target_entry,
-                                 query_chain_mapped, target_chain_mapped, source
-                    ) TO '{cigar_temporary.as_posix()}'
-                    (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 500_000);
-                    """
-                )
-            )
     else:
         pq.write_table(
             pa.Table.from_pylist(
                 [],
                 schema=schemas.release_alignment_mapping_schema(
-                    alignment_type=alignment_type
+                    alignment_type=alignment_type,
+                    include_scores=protein_scores_target is None,
                 ),
             ),
             temporary,
@@ -4247,12 +4358,6 @@ def _write_alignment_release_shard(
                     schema=schemas.PROTEIN_SIMILARITY_EXPORT_SCHEMA,
                 ),
                 protein_scores_temporary,
-                compression="zstd",
-            )
-        if cigar_temporary is not None:
-            pq.write_table(
-                pa.Table.from_pylist([], schema=schemas.ALIGNMENT_CIGAR_SCHEMA),
-                cigar_temporary,
                 compression="zstd",
             )
     con.close()
@@ -4268,12 +4373,6 @@ def _write_alignment_release_shard(
         copyfile(protein_scores_temporary, install_path)
         install_path.replace(protein_scores_target)
         protein_scores_temporary.unlink(missing_ok=True)
-    if cigar_target is not None and cigar_temporary is not None:
-        cigar_target.parent.mkdir(exist_ok=True, parents=True)
-        install_path = cigar_target.with_suffix(cigar_target.suffix + ".tmp")
-        copyfile(cigar_temporary, install_path)
-        install_path.replace(cigar_target)
-        cigar_temporary.unlink(missing_ok=True)
 
 
 def scatter_collate_alignments(*, data_dir: Path) -> list[list[str]]:
@@ -4553,6 +4652,7 @@ def make_linked_apo_structures(
                 data_dir=data_dir,
                 search_db="interface_apo",
                 shard=str(shard),
+                require_raw_inputs=False,
             ):
                 raise ValueError(
                     f"interface apo alignment mapping is incomplete for shard {shard}"
@@ -4583,9 +4683,10 @@ def make_linked_apo_structures(
             else pd.DataFrame(columns=CANDIDATE_COLUMNS)
         )
         write_interface_apo_structure_table(
-            data_dir / "alignments/search_db=interface_apo/alignment_type=mmseqs",
+            data_dir / "alignment_cigars/search_db=interface_apo/alignment_type=mmseqs",
             foldseek_alignments=(
-                data_dir / "alignments/search_db=interface_apo/alignment_type=foldseek"
+                data_dir
+                / "alignment_cigars/search_db=interface_apo/alignment_type=foldseek"
             ),
             queries=interface_queries,
             candidates=interface_candidates,
@@ -4830,6 +4931,17 @@ def _reduce_component_metric(metric_index: int, metric: str) -> dict[str, Any]:
         ]
     else:
         manifests = [
+            clusters.make_score_component_reduction(
+                data_dir=context["data_dir"],
+                metric=metric,
+                thresholds=context["thresholds"],
+                source_path=context["source"],
+                read_path=context["local_source"],
+                all_nodes=context["nodes"],
+                eligible_systems=context["eligible_systems"],
+                force_update=context["force_update"],
+                entity_type=context["entity_type"],
+            ),
             clusters.make_directed_cover_component_reduction(
                 data_dir=context["data_dir"],
                 metric=metric,
@@ -4840,7 +4952,7 @@ def _reduce_component_metric(metric_index: int, metric: str) -> dict[str, Any]:
                 eligible_systems=context["eligible_systems"],
                 force_update=context["force_update"],
                 entity_type=context["entity_type"],
-            )
+            ),
         ]
     return {
         "metric_index": metric_index,
@@ -4933,14 +5045,25 @@ def make_component_reductions(
                     entity_type=entity_type,
                 )
                 if is_chemical
-                else clusters.directed_cover_component_reduction_is_complete(
-                    data_dir=data_dir,
-                    metric=metric,
-                    thresholds=thresholds,
-                    source_path=source,
-                    all_nodes=nodes,
-                    eligible_systems=eligible_systems,
-                    entity_type=entity_type,
+                else (
+                    clusters.score_component_reduction_is_complete(
+                        data_dir=data_dir,
+                        metric=metric,
+                        thresholds=thresholds,
+                        source_path=source,
+                        all_nodes=nodes,
+                        eligible_systems=eligible_systems,
+                        entity_type=entity_type,
+                    )
+                    and clusters.directed_cover_component_reduction_is_complete(
+                        data_dir=data_dir,
+                        metric=metric,
+                        thresholds=thresholds,
+                        source_path=source,
+                        all_nodes=nodes,
+                        eligible_systems=eligible_systems,
+                        entity_type=entity_type,
+                    )
                 )
             )
         ]
@@ -5051,14 +5174,13 @@ def merge_component_reductions(
             index,
             len(metrics),
         )
-        if is_chemical_cluster_metric(metric):
-            clusters.merge_score_component_reductions(
-                data_dir=data_dir,
-                metric=metric,
-                thresholds=thresholds,
-                entity_type=entity_type,
-            )
-        else:
+        clusters.merge_score_component_reductions(
+            data_dir=data_dir,
+            metric=metric,
+            thresholds=thresholds,
+            entity_type=entity_type,
+        )
+        if not is_chemical_cluster_metric(metric):
             clusters.merge_directed_cover_component_reductions(
                 data_dir=data_dir,
                 metric=metric,
@@ -5147,10 +5269,19 @@ def summarize_clusters(
     )
 
 
-def finalize_index(*, data_dir: Path) -> None:
+def finalize_index(
+    *,
+    data_dir: Path,
+    weekly_ligand_clusters: Path | None = None,
+    weekly_interface_clusters: Path | None = None,
+) -> None:
     """Publish annotation enrichment and queryable cluster sidecars."""
     lookup_was_current = _completed_alignment_chain_lookup(data_dir) is not None
-    utils.finalize_index(data_dir=data_dir)
+    utils.finalize_index(
+        data_dir=data_dir,
+        weekly_ligand_clusters=weekly_ligand_clusters,
+        weekly_interface_clusters=weekly_interface_clusters,
+    )
     # finalize_index preserves the entry, chain, pocket, and interface fields
     # used to build the representative inputs. Refresh those source signatures
     # so an otherwise valid mapped release does not become stale merely because

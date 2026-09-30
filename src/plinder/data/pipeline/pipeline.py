@@ -385,7 +385,6 @@ class IngestPipeline:
                 data_dir=self.plinder_dir,
                 batch_size=self.cfg.flow.map_batch_alignments_batch_size,
                 search_db=search_db,
-                publish_alignment_cigars=self.cfg.scorer.publish_alignment_cigars,
             )
             work.extend((search_db, shards) for shards in chunks if shards)
         return work or [(str(self.cfg.scorer.sub_databases[0]), [])]
@@ -693,7 +692,7 @@ class IngestPipeline:
         entities: list[tuple[Literal["ligand", "interface"], list[str]]] = [
             ("ligand", list(self.cfg.flow.cluster_metrics))
         ]
-        entities.append(("interface", ["interface_qcov"]))
+        entities.append(("interface", ["interface_qcov", "interface_side_qcov"]))
         return entities
 
     @utils.ingest_flow_control

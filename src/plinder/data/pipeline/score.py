@@ -19,8 +19,10 @@ from typing import Any, cast
 
 import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from plinder.core.scores.mapping import cigar_alignment_sql
 from plinder.core.scores.metrics import (
     DEFAULT_CLUSTER_METRICS,
     is_chemical_cluster_metric,
@@ -64,6 +66,9 @@ INTERFACE_SCORE_REPAIR_ROOT_RELATIVE = Path("interface_score_repairs")
 INTERFACE_SIMILARITY_EXPORT_RELATIVE = Path(
     "exports/interface_similarity_scores.parquet"
 )
+INTERFACE_HALF_SIMILARITY_EXPORT_RELATIVE = Path(
+    "exports/interface_half_similarity_scores.parquet"
+)
 LIGAND_POCKET_QCOV_REPRESENTATIVE_ROOT_RELATIVE = Path(
     "scores/ligand_pocket_qcov_representatives"
 )
@@ -89,6 +94,12 @@ def _source_signature(path: Path) -> dict[str, int | str]:
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
     }
+
+
+def _same_file_signature(stored: Any, current: dict[str, int | str]) -> bool:
+    return isinstance(stored, dict) and all(
+        stored.get(key) == current[key] for key in ("size", "mtime_ns")
+    )
 
 
 def dropped_query_ids(data_dir: Path) -> set[str]:
@@ -355,6 +366,7 @@ def plan_score_repair(
     *,
     affected_manifest: Path,
     additional_full_query_manifest: Path | None = None,
+    additional_target_query_manifest: Path | None = None,
     output_path: Path | None = None,
     batch_size: int = 10,
     target_batch_size: int | None = None,
@@ -364,9 +376,8 @@ def plan_score_repair(
 ) -> dict[str, Any]:
     """Plan full-query and target-only rescoring for affected PDB entries.
 
-    ``additional_full_query_manifest`` can promote queries whose scoreable
-    system set changed independently of the affected target entries. These
-    entries are rescored as queries but are not treated as changed targets.
+    Extra full queries are rescored against all targets. Extra target queries
+    are checked against affected targets even if their old hits disappeared.
     """
     if target_batch_size is None:
         target_batch_size = batch_size
@@ -420,6 +431,15 @@ def plan_score_repair(
     )
     additional_full = requested_additional_full.intersection(active)
     full_queries = affected.intersection(active).union(additional_full)
+    additional_target_queries = (
+        (
+            set(_load_pdb_id_manifest(additional_target_query_manifest))
+            if additional_target_query_manifest is not None
+            else set()
+        )
+        .intersection(active)
+        .difference(full_queries)
+    )
     existing_affected_queries = {
         pdb_id
         for pdb_id in affected
@@ -446,7 +466,7 @@ def plan_score_repair(
     )
     inactive_queries = existing_affected_queries.difference(active)
     alignment_paths = sorted(
-        (data_dir / "alignments" / "search_db=holo").glob(
+        (data_dir / "alignment_cigars" / "search_db=holo").glob(
             "alignment_type=*/shard=*.parquet"
         )
     )
@@ -512,6 +532,12 @@ def plan_score_repair(
                 if query_id in full_queries
                 else int(row.target_alignment_rows)
             )
+
+    for query_id in additional_target_queries:
+        targets_by_query[query_id] = sorted(
+            set(targets_by_query.get(query_id, [])) | affected
+        )
+        work_by_query[query_id] = max(1, work_by_query.get(query_id, 0))
 
     missing_cache_queries = {
         pdb_id
@@ -598,6 +624,11 @@ def plan_score_repair(
         "additional_full_query_manifest": (
             _source_signature(additional_full_query_manifest)
             if additional_full_query_manifest is not None
+            else None
+        ),
+        "additional_target_query_manifest": (
+            _source_signature(additional_target_query_manifest)
+            if additional_target_query_manifest is not None
             else None
         ),
         "output": _source_signature(output),
@@ -1375,15 +1406,18 @@ def merge_score_repair_ligand_3d(
                  INNER JOIN read_parquet('{cached.as_posix()}') USING ({keys}))
             """
         ).fetchone()
-        if (
-            validation is None
-            or validation[0] != validation[1]
-            or validation[2]
-            or validation[3]
-        ):
+        if validation is None or validation[0] != validation[1] or validation[2]:
             connection.close()
             raise ValueError(
                 f"invalid ligand 3D repair coverage for shard {shard}: {validation}"
+            )
+        if validation[3] == validation[0]:
+            connection.close()
+            continue
+        if validation[3]:
+            connection.close()
+            raise ValueError(
+                f"partly merged ligand 3D repair shard {shard}: {validation}"
             )
         temporary = scratch_dir / f"{shard}.parquet"
         temporary.unlink(missing_ok=True)
@@ -1896,7 +1930,7 @@ def plan_score_batches(
     annotation = data_dir / "index" / "annotation_table.parquet"
     entry_chains = data_dir / "index" / "entry_chains.parquet"
     alignment_paths = sorted(
-        (data_dir / "alignments" / "search_db=holo").glob(
+        (data_dir / "alignment_cigars" / "search_db=holo").glob(
             "alignment_type=*/shard=*.parquet"
         )
     )
@@ -3094,6 +3128,9 @@ def summarize_clustering_artifacts(
     directed_sampling_dir = sampling_root / "directed_set_cover"
     set_cover_dir = sampling_root / "set_cover"
     node_column = clusters._cluster_node_column(entity_type)
+    centroid_column = (
+        "centroid_ligand_id" if entity_type == "ligand" else "centroid_system_id"
+    )
     artifacts: list[tuple[str, int, str, bool, Path]] = []
     for metric in selected_metrics:
         for threshold in selected_thresholds:
@@ -3131,7 +3168,7 @@ def summarize_clustering_artifacts(
         if not path.is_file():
             issues.append(f"missing cluster artifact: {path}")
             continue
-        frame = pd.read_parquet(path, columns=[node_column, "label"])
+        frame = pd.read_parquet(path, columns=[node_column, "label", centroid_column])
         duplicate_nodes = int(frame[node_column].duplicated().sum())
         null_labels = int(frame["label"].isna().sum())
         sizes = frame["label"].dropna().astype(str).value_counts()
@@ -3158,6 +3195,11 @@ def summarize_clustering_artifacts(
             issues.append(f"{path} contains {duplicate_nodes} duplicate node IDs")
         if null_labels:
             issues.append(f"{path} contains {null_labels} null labels")
+        centroid_counts = (
+            frame[node_column].eq(frame[centroid_column]).groupby(frame["label"]).sum()
+        )
+        if centroid_counts.ne(1).any():
+            issues.append(f"{path} must have exactly one representative row per label")
         if index % 10 == 0 or index == len(artifacts):
             elapsed = perf_counter() - started
             rate = index / elapsed
@@ -3375,6 +3417,7 @@ def publish_search_database_bundles(
             rmtree(path)
     staging.mkdir(parents=True)
     reports: dict[str, dict[str, int | str]] = {}
+    overlay_reports: dict[str, dict[str, int | str]] = {}
     try:
         for alignment_type in alignment_types:
             reports[alignment_type] = databases.publish_search_database_bundle(
@@ -3382,9 +3425,30 @@ def publish_search_database_bundles(
                 target_root=staging / f"holo_{alignment_type}",
                 aln_type=alignment_type,
             )
+            overlay_source = (
+                data_dir / "dbs/weekly_delta/subdbs" / f"holo_{alignment_type}"
+            )
+            if (overlay_source / "exact_cluster.json").is_file():
+                overlay_reports[alignment_type] = (
+                    databases.publish_search_database_bundle(
+                        source_root=overlay_source,
+                        target_root=staging / "weekly_delta" / f"holo_{alignment_type}",
+                        aln_type=alignment_type,
+                    )
+                )
+        shadowed = data_dir / "manifests/weekly_shadowed_entries.parquet"
+        if shadowed.is_file():
+            copyfile(shadowed, staging / "shadowed_entries.parquet")
         write_json_atomic(
             staging / "manifest.json",
-            {"status": "complete", "bundles": reports},
+            {
+                "status": "complete",
+                "bundles": reports,
+                "overlays": overlay_reports,
+                "shadowed_entries": (
+                    "shadowed_entries.parquet" if shadowed.is_file() else None
+                ),
+            },
         )
         if output.exists():
             output.rename(backup)
@@ -3402,7 +3466,7 @@ def publish_search_database_bundles(
 
 def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
     """Validate compact release shards from their atomic mapping manifests."""
-    plan = _load_plan(data_dir, recheck_source=True)
+    plan = _load_plan(data_dir, recheck_source=True, recheck_score_inputs=False)
     expected_queries = set(
         pd.read_parquet(data_dir / MANIFEST_RELATIVE, columns=["pdb_id"])[
             "pdb_id"
@@ -3488,7 +3552,6 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
     }
     protein_score_sources: list[dict[str, Any]] = []
     cigar_sources: list[dict[str, Any]] = []
-    cigar_states: set[bool] = set()
     invalid_manifests: list[str] = []
     for manifest_path in manifest_paths:
         shard = manifest_path.stem.removeprefix("shard=")
@@ -3500,8 +3563,6 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         inputs = shard_manifest.get("inputs")
         outputs = shard_manifest.get("outputs")
         protein_score_outputs = shard_manifest.get("protein_score_outputs")
-        publishes_cigars = shard_manifest.get("publish_alignment_cigars")
-        cigar_outputs = shard_manifest.get("cigar_outputs")
         shard_skipped = shard_manifest.get("skipped_queries")
         if (
             shard_manifest.get("shard") != shard
@@ -3509,13 +3570,10 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
             or not isinstance(inputs, dict)
             or not isinstance(outputs, dict)
             or not isinstance(protein_score_outputs, dict)
-            or not isinstance(publishes_cigars, bool)
-            or not isinstance(cigar_outputs, dict)
             or not isinstance(shard_skipped, dict)
         ):
             invalid_manifests.append(shard)
             continue
-        cigar_states.add(publishes_cigars)
         skipped_query_details.update(
             {str(key): value for key, value in shard_skipped.items()}
         )
@@ -3533,13 +3591,8 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
             )
             expected_output = outputs.get(alignment_type)
             expected_protein_scores = protein_score_outputs.get(alignment_type)
-            expected_cigars = cigar_outputs.get(alignment_type)
             if not signatures:
-                if (
-                    expected_output is not None
-                    or expected_protein_scores is not None
-                    or expected_cigars is not None
-                ):
+                if expected_output is not None or expected_protein_scores is not None:
                     invalid_manifests.append(shard)
                 continue
             release = tasks._alignment_release_path(
@@ -3561,7 +3614,7 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
                 continue
             columns = set(pq.read_schema(release).names)
             if not schemas.release_alignment_mapping_schema_is_current(
-                columns, alignment_type=alignment_type
+                columns, alignment_type=alignment_type, include_scores=False
             ):
                 invalid_manifests.append(shard)
                 continue
@@ -3595,39 +3648,15 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
                     "rows": int(pq.ParquetFile(protein_scores).metadata.num_rows),
                 }
             )
-            if publishes_cigars:
-                cigars = tasks._alignment_cigar_path(
-                    data_dir=data_dir,
-                    search_db="holo",
-                    alignment_type=alignment_type,
-                    shard=shard,
-                )
-                if (
-                    not isinstance(expected_cigars, dict)
-                    or not cigars.is_file()
-                    or not pq.read_schema(cigars).equals(schemas.ALIGNMENT_CIGAR_SCHEMA)
-                ):
-                    invalid_manifests.append(shard)
-                    continue
-                cigar_stat = cigars.stat()
-                if expected_cigars != {
-                    "name": cigars.name,
-                    "size": cigar_stat.st_size,
-                    "mtime_ns": cigar_stat.st_mtime_ns,
-                }:
-                    invalid_manifests.append(shard)
-                    continue
-                cigar_sources.append(
-                    {
-                        "alignment_type": alignment_type,
-                        "shard": shard,
-                        **_source_signature(cigars),
-                        "rows": int(pq.ParquetFile(cigars).metadata.num_rows),
-                    }
-                )
+            cigar_sources.append(
+                {
+                    "alignment_type": alignment_type,
+                    "shard": shard,
+                    **_source_signature(release),
+                    "rows": int(pq.ParquetFile(release).metadata.num_rows),
+                }
+            )
             release_shards_by_backend[alignment_type].add(shard)
-    if len(cigar_states) > 1:
-        missing["inconsistent_cigar_publication"] = ["mixed shard settings"]
     if invalid_manifests:
         missing["invalid_mapping_manifests"] = sorted(set(invalid_manifests))[:100]
 
@@ -3693,7 +3722,6 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         "protein_similarity_score_rows": sum(
             int(source["rows"]) for source in protein_score_sources
         ),
-        "alignment_cigars_published": cigar_states == {True},
         "alignment_cigar_rows": sum(int(source["rows"]) for source in cigar_sources),
     }
     write_json_atomic(data_dir / "alignments" / "manifest.json", report)
@@ -3954,6 +3982,7 @@ def finalize_score_repair_artifacts(
     data_dir: Path,
     *,
     repair_manifest: Path,
+    require_packed_scores: bool = True,
 ) -> dict[str, Any]:
     """Validate ligand-pair caches and score shards rebuilt by a repair run.
 
@@ -3993,9 +4022,10 @@ def finalize_score_repair_artifacts(
             ligand_pair_score,
             pair_candidate,
             pair,
-            score,
             manifest_path,
         ]
+        if require_packed_scores:
+            required_paths.append(score)
         missing_paths = [path for path in required_paths if not path.is_file()]
         if missing_paths:
             raise FileNotFoundError(
@@ -4063,10 +4093,14 @@ def finalize_score_repair_artifacts(
                 pq.read_schema(pair).names
             )
         )
-        score_missing = sorted(
-            set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).difference(
-                pq.read_schema(score).names
+        score_missing = (
+            sorted(
+                set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).difference(
+                    pq.read_schema(score).names
+                )
             )
+            if require_packed_scores
+            else []
         )
         missing_columns = {
             name: columns
@@ -4087,22 +4121,24 @@ def finalize_score_repair_artifacts(
                 f"repaired shard {shard} has incomplete schemas: {missing_columns}"
             )
 
-        score_stat = score.stat()
-        newest_input_ns = max(
-            repair_started_ns,
-            candidate_stat.st_mtime_ns,
-            ligand_pair_score_stat.st_mtime_ns,
-            pair_candidate_stat.st_mtime_ns,
-            pair.stat().st_mtime_ns,
-        )
-        if score_stat.st_mtime_ns < newest_input_ns:
-            raise ValueError(
-                f"repaired score shard {score} predates its current inputs"
+        if require_packed_scores:
+            score_stat = score.stat()
+            newest_input_ns = max(
+                repair_started_ns,
+                candidate_stat.st_mtime_ns,
+                ligand_pair_score_stat.st_mtime_ns,
+                pair_candidate_stat.st_mtime_ns,
+                pair.stat().st_mtime_ns,
             )
+            if score_stat.st_mtime_ns < newest_input_ns:
+                raise ValueError(
+                    f"repaired score shard {score} predates its current inputs"
+                )
         candidate_rows += candidate_row_count
         ligand_pair_score_rows += ligand_pair_score_row_count
         pair_rows += pq.ParquetFile(pair).metadata.num_rows
-        score_rows += pq.ParquetFile(score).metadata.num_rows
+        if require_packed_scores:
+            score_rows += pq.ParquetFile(score).metadata.num_rows
         if index % 100 == 0 or index == len(shards):
             elapsed = perf_counter() - started
             rate = index / elapsed
@@ -4190,7 +4226,7 @@ def score_ligand_pocket_qcov_representatives(
                             )
                         END
                     ) AS target_selected_residue_numbers
-                FROM read_parquet('{path.as_posix()}') AS alignment
+                FROM ({cigar_alignment_sql(path, chain_lookup)}) AS alignment
                 INNER JOIN read_parquet('{chain_lookup.as_posix()}') AS query_chain
                   ON alignment.query_entry = query_chain.entry_pdb_id
                  AND alignment.query_chain_mapped = query_chain.chain_asym_id
@@ -5272,12 +5308,13 @@ def score_interface_qcov_shards(
     threads: int = 4,
     memory_limit: str = "32GB",
     side_coverage_bucket_count: int = 32,
+    assignment_target_bucket_count: int = 1,
     force_update: bool = False,
     query_entries_by_shard: Mapping[str, set[str]] | None = None,
     output_paths_by_shard: Mapping[str, Path] | None = None,
 ) -> dict[str, Any]:
     """Score all directed interface pairs for complete query shards."""
-    if min(threads, side_coverage_bucket_count) < 1:
+    if min(threads, side_coverage_bucket_count, assignment_target_bucket_count) < 1:
         raise ValueError(
             "interface scoring threads and side-coverage buckets must be positive"
         )
@@ -5370,7 +5407,7 @@ def score_interface_qcov_shards(
                                 )
                             END
                         ) AS target_selected_residue_numbers
-                    FROM read_parquet('{path.as_posix()}') AS alignment
+                    FROM ({cigar_alignment_sql(path, chain_lookup)}) AS alignment
                     INNER JOIN read_parquet(
                         '{chain_lookup.as_posix()}'
                     ) AS query_chain
@@ -5399,9 +5436,11 @@ def score_interface_qcov_shards(
         connection.sql("SET preserve_insertion_order=false")
         coverage_root = local_root / "coverage_partitions"
         side_coverage_root = local_root / "side_coverage_partitions"
+        whole_coverage_root = local_root / "whole_coverage_partitions"
         side_coverage_output = local_root / "side_coverage.parquet"
         rmtree(coverage_root, ignore_errors=True)
         rmtree(side_coverage_root, ignore_errors=True)
+        rmtree(whole_coverage_root, ignore_errors=True)
         side_coverage_output.unlink(missing_ok=True)
         side_started = perf_counter()
         LOG.info(
@@ -5502,6 +5541,7 @@ def score_interface_qcov_shards(
         connection.close()
         coverage_partitions = sorted(coverage_root.glob("target_bucket=*"))
         side_coverage_root.mkdir(parents=True)
+        whole_coverage_root.mkdir()
         coverage_rows = 0
         side_rows = 0
         for bucket_index, partition in enumerate(coverage_partitions, start=1):
@@ -5542,6 +5582,20 @@ def score_interface_qcov_shards(
                     )
                     """
                 )
+            )
+            whole_coverage_part = whole_coverage_root / side_part.name
+            connection.sql(
+                f"""
+                COPY (
+                    SELECT backend, query_half, target_half,
+                           max(qcov) AS qcov,
+                           min(query_instance_chain || ':' || target_instance_chain)
+                               AS mapping_part
+                    FROM read_parquet('{side_part.as_posix()}')
+                    GROUP BY backend, query_half, target_half
+                ) TO '{whole_coverage_part.as_posix()}'
+                    (FORMAT PARQUET, COMPRESSION ZSTD)
+                """
             )
             connection.close()
             side_rows += pq.ParquetFile(side_part).metadata.num_rows
@@ -5618,13 +5672,24 @@ def score_interface_qcov_shards(
             whole_score_root.mkdir()
             side_score_root.mkdir()
             assignment_started = perf_counter()
+            assignment_bucket_count = (
+                side_coverage_bucket_count * assignment_target_bucket_count
+            )
             LOG.info(
                 "interface assignment reduction: shard=%s buckets=%d starting",
                 shard,
-                side_coverage_bucket_count,
+                assignment_bucket_count,
             )
             whole_rows = 0
-            for bucket_index in range(side_coverage_bucket_count):
+            interface_query_filter = (
+                f"entry_pdb_id IN ({selected})"
+                if query_entries is not None
+                else f"substr(entry_pdb_id, 2, 2) = '{shard}'"
+            )
+            for bucket_index in range(assignment_bucket_count):
+                query_bucket, target_bucket = divmod(
+                    bucket_index, assignment_target_bucket_count
+                )
                 whole_part = whole_score_root / f"part-{bucket_index:03d}.parquet"
                 connection = duckdb.connect()
                 connection.sql(f"SET threads={threads}")
@@ -5638,98 +5703,83 @@ def score_interface_qcov_shards(
                             WITH query_interfaces AS (
                                 SELECT
                                     representative_system_id AS interface_id,
-                                    half_interface_1_id AS half_interface_id,
-                                    1::UTINYINT AS query_side
+                                    half_interface_1_id,
+                                    half_interface_2_id
                                 FROM read_parquet('{interface_path.as_posix()}')
                                 WHERE hash(representative_system_id)
-                                    % {side_coverage_bucket_count} = {bucket_index}
-                                UNION ALL
-                                SELECT
-                                    representative_system_id AS interface_id,
-                                    half_interface_2_id AS half_interface_id,
-                                    2::UTINYINT AS query_side
-                                FROM read_parquet('{interface_path.as_posix()}')
-                                WHERE hash(representative_system_id)
-                                    % {side_coverage_bucket_count} = {bucket_index}
+                                    % {side_coverage_bucket_count} = {query_bucket}
+                                  AND {interface_query_filter}
                             ), target_interfaces AS (
                                 SELECT
                                     representative_system_id AS interface_id,
-                                    half_interface_1_id AS half_interface_id,
-                                    1::UTINYINT AS target_side
+                                    half_interface_1_id AS target_half_1,
+                                    half_interface_2_id AS target_half_2,
+                                    0::TINYINT AS assignment_order
                                 FROM read_parquet('{interface_path.as_posix()}')
+                                WHERE hash(representative_system_id)
+                                    % {assignment_target_bucket_count}
+                                    = {target_bucket}
                                 UNION ALL
                                 SELECT
                                     representative_system_id AS interface_id,
-                                    half_interface_2_id AS half_interface_id,
-                                    2::UTINYINT AS target_side
+                                    half_interface_2_id AS target_half_1,
+                                    half_interface_1_id AS target_half_2,
+                                    1::TINYINT AS assignment_order
                                 FROM read_parquet('{interface_path.as_posix()}')
+                                WHERE hash(representative_system_id)
+                                    % {assignment_target_bucket_count}
+                                    = {target_bucket}
                             ), side_coverage AS (
-                                SELECT *
-                                FROM read_parquet(
-                                    '{side_coverage_output.as_posix()}'
-                                )
-                            ), contributions AS (
                                 SELECT
-                                    coverage.backend,
+                                    backend,
+                                    query_half,
+                                    target_half,
+                                    qcov,
+                                    mapping_part
+                                FROM read_parquet(
+                                    '{whole_coverage_root.as_posix()}/*.parquet'
+                                )
+                                WHERE query_half IN (
+                                    SELECT half_interface_1_id FROM query_interfaces
+                                    UNION
+                                    SELECT half_interface_2_id FROM query_interfaces
+                                ) AND target_half IN (
+                                    SELECT target_half_1 FROM target_interfaces
+                                    UNION
+                                    SELECT target_half_2 FROM target_interfaces
+                                )
+                            ), first_matches AS MATERIALIZED (
+                                SELECT
+                                    first_side.backend,
                                     query_interface.interface_id AS iface1,
                                     target_interface.interface_id AS iface2,
-                                    query_interface.query_side,
-                                    CASE
-                                        WHEN query_interface.query_side
-                                            = target_interface.target_side
-                                        THEN 0
-                                        ELSE 1
-                                    END::TINYINT AS assignment_order,
-                                    coverage.qcov,
-                                    coverage.query_instance_chain || ':'
-                                        || coverage.target_instance_chain
-                                        AS mapping_part
-                                FROM side_coverage AS coverage
-                                INNER JOIN query_interfaces AS query_interface
-                                  ON coverage.query_half
-                                    = query_interface.half_interface_id
+                                    first_side.qcov AS iface1_qcov,
+                                    first_side.mapping_part AS iface1_mapping,
+                                    query_interface.half_interface_2_id AS query_half_2,
+                                    target_interface.target_half_2,
+                                    target_interface.assignment_order
+                                FROM query_interfaces AS query_interface
+                                INNER JOIN side_coverage AS first_side
+                                  ON first_side.query_half
+                                    = query_interface.half_interface_1_id
                                 INNER JOIN target_interfaces AS target_interface
-                                  ON coverage.target_half
-                                    = target_interface.half_interface_id
+                                  ON first_side.target_half
+                                    = target_interface.target_half_1
                                 WHERE query_interface.interface_id
                                     != target_interface.interface_id
-                            ), assignment_sides AS (
-                                SELECT
-                                    backend,
-                                    iface1,
-                                    iface2,
-                                    assignment_order,
-                                    max(qcov) FILTER (
-                                        WHERE query_side = 1
-                                    ) AS iface1_qcov,
-                                    max(qcov) FILTER (
-                                        WHERE query_side = 2
-                                    ) AS iface2_qcov,
-                                    min(mapping_part) FILTER (
-                                        WHERE query_side = 1
-                                    ) AS iface1_mapping,
-                                    min(mapping_part) FILTER (
-                                        WHERE query_side = 2
-                                    ) AS iface2_mapping
-                                FROM contributions
-                                GROUP BY
-                                    backend,
-                                    iface1,
-                                    iface2,
-                                    assignment_order
-                                HAVING count(DISTINCT query_side) = 2
                             ), assignments AS (
-                                SELECT
-                                    backend,
-                                    iface1,
-                                    iface2,
-                                    iface1_qcov,
-                                    iface2_qcov,
-                                    iface1_qcov * iface2_qcov AS final_score,
-                                    iface1_mapping || ';' || iface2_mapping
-                                        AS mapping,
-                                    assignment_order
-                                FROM assignment_sides
+                                SELECT first_matches.* EXCLUDE (
+                                           iface1_mapping, query_half_2, target_half_2
+                                       ),
+                                       second_side.qcov AS iface2_qcov,
+                                       iface1_qcov * second_side.qcov AS final_score,
+                                       iface1_mapping || ';' || second_side.mapping_part
+                                           AS mapping
+                                FROM first_matches
+                                INNER JOIN side_coverage AS second_side
+                                  ON second_side.query_half = first_matches.query_half_2
+                                 AND second_side.target_half = first_matches.target_half_2
+                                 AND second_side.backend = first_matches.backend
                             ), backend_best AS (
                                 SELECT * EXCLUDE (
                                     assignment_rank,
@@ -5818,14 +5868,14 @@ def score_interface_qcov_shards(
                 connection.close()
                 whole_rows += pq.ParquetFile(whole_part).metadata.num_rows
                 if (bucket_index + 1) % 8 == 0 or (
-                    bucket_index + 1 == side_coverage_bucket_count
+                    bucket_index + 1 == assignment_bucket_count
                 ):
                     LOG.info(
                         "interface assignment progress: shard=%s buckets=%d/%d "
                         "whole_rows=%d elapsed_seconds=%.1f",
                         shard,
                         bucket_index + 1,
-                        side_coverage_bucket_count,
+                        assignment_bucket_count,
                         whole_rows,
                         perf_counter() - assignment_started,
                     )
@@ -6177,6 +6227,7 @@ def score_interface_qcov_repair_batch(
     threads: int = 4,
     memory_limit: str = "32GB",
     side_coverage_bucket_count: int = 32,
+    assignment_target_bucket_count: int = 1,
     force_update: bool = False,
 ) -> dict[str, Any]:
     """Score one immutable, query-entry-filtered interface repair batch."""
@@ -6209,6 +6260,7 @@ def score_interface_qcov_repair_batch(
         threads=threads,
         memory_limit=memory_limit,
         side_coverage_bucket_count=side_coverage_bucket_count,
+        assignment_target_bucket_count=assignment_target_bucket_count,
         force_update=force_update,
         query_entries_by_shard={shard: query_entries},
         output_paths_by_shard={shard: output},
@@ -6413,6 +6465,199 @@ def finalize_interface_score_repair(
     }
 
 
+def _sort_interface_export(
+    source: Path, output: Path, *, columns: tuple[str, ...]
+) -> None:
+    """Sort bounded row-group batches to keep repeated query IDs together."""
+    parquet = pq.ParquetFile(source)
+    rows = 0
+    with pq.ParquetWriter(
+        output, parquet.schema_arrow, compression="zstd", compression_level=9
+    ) as writer:
+        for start in range(0, parquet.num_row_groups, 32):
+            block = parquet.read_row_groups(
+                range(start, min(start + 32, parquet.num_row_groups))
+            )
+            order = pc.sort_indices(
+                block,
+                sort_keys=[(column, "ascending") for column in columns],
+            )
+            writer.write_table(block.take(order), row_group_size=500_000)
+            rows += len(block)
+    if pq.ParquetFile(output).metadata.num_rows != rows:
+        raise ValueError("sorted interface export has the wrong row count")
+
+
+def _finalize_interface_half_similarity_scores(
+    data_dir: Path,
+    *,
+    sources: list[dict[str, Any]],
+    full_rows: int,
+    scratch_dir: Path,
+    threads: int,
+    memory_limit: str,
+) -> dict[str, Any]:
+    """Keep the directed chain-side scores without the raw scoring payload."""
+    output = data_dir / INTERFACE_HALF_SIMILARITY_EXPORT_RELATIVE
+    manifest = output.with_suffix(output.suffix + ".json")
+    plan_signature = _source_signature(data_dir / INTERFACE_SCORE_PLAN_RELATIVE)
+    expected_rows = sum(int(source["rows"]) for source in sources) - full_rows
+    if output.is_file() and manifest.is_file():
+        try:
+            current = cast(dict[str, Any], json.loads(manifest.read_text()))
+            if (
+                current.get("interface_plan") == plan_signature
+                and current.get("sources") == sources
+                and current.get("ordering") == "query_target_similarity"
+                and current.get("output") == _source_signature(output)
+                and current.get("row_count") == expected_rows
+                and pq.read_schema(output).equals(
+                    schemas.INTERFACE_HALF_SIMILARITY_EXPORT_SCHEMA
+                )
+            ):
+                return current
+        except (OSError, TypeError, ValueError):
+            pass
+
+    scratch_dir.mkdir(exist_ok=True, parents=True)
+    output.parent.mkdir(exist_ok=True, parents=True)
+    local_output = output.with_suffix(output.suffix + ".tmp")
+    local_output.unlink(missing_ok=True)
+    if sources:
+        import duckdb
+
+        paths = [
+            data_dir
+            / INTERFACE_SCORE_ROOT_RELATIVE
+            / f"shard={source['shard']}.parquet"
+            for source in sources
+        ]
+        paths_sql = ", ".join(f"'{path.as_posix()}'" for path in paths)
+        with duckdb.connect() as connection:
+            connection.sql(f"SET threads={threads}")
+            connection.sql(f"SET temp_directory='{scratch_dir.as_posix()}'")
+            connection.sql(f"SET memory_limit='{memory_limit}'")
+            connection.sql("SET preserve_insertion_order=false")
+            connection.sql(
+                dedent(
+                    f"""
+                    COPY (
+                        SELECT
+                            query_system AS query_half_interface_id,
+                            target_system AS target_half_interface_id,
+                            similarity
+                        FROM read_parquet([{paths_sql}])
+                        WHERE metric = 'interface_side_qcov'
+                    ) TO '{local_output.as_posix()}' (
+                        FORMAT PARQUET,
+                        COMPRESSION ZSTD,
+                        ROW_GROUP_SIZE 500000
+                    )
+                    """
+                )
+            )
+    else:
+        pq.write_table(
+            pa.Table.from_pylist(
+                [], schema=schemas.INTERFACE_HALF_SIMILARITY_EXPORT_SCHEMA
+            ),
+            local_output,
+            compression="zstd",
+        )
+    if sources:
+        sorted_output = output.with_suffix(output.suffix + ".sorted.tmp")
+        sorted_output.unlink(missing_ok=True)
+        try:
+            _sort_interface_export(
+                local_output,
+                sorted_output,
+                columns=(
+                    "query_half_interface_id",
+                    "target_half_interface_id",
+                    "similarity",
+                ),
+            )
+            sorted_output.replace(local_output)
+        finally:
+            sorted_output.unlink(missing_ok=True)
+    rows = pq.ParquetFile(local_output).metadata.num_rows
+    if rows != expected_rows or not pq.read_schema(local_output).equals(
+        schemas.INTERFACE_HALF_SIMILARITY_EXPORT_SCHEMA
+    ):
+        local_output.unlink(missing_ok=True)
+        raise ValueError(
+            "compact half-interface scores do not cover the scored side rows: "
+            f"{rows}/{expected_rows}"
+        )
+    local_output.replace(output)
+    report = {
+        "status": "complete",
+        "metric": "interface_side_qcov",
+        "direction": "query_half_interface_id_to_target_half_interface_id",
+        "ordering": "query_target_similarity",
+        "interface_plan": plan_signature,
+        "sources": sources,
+        "row_count": rows,
+        "output": _source_signature(output),
+    }
+    write_json_atomic(manifest, report)
+    return report
+
+
+def finalize_interface_half_similarity_scores(
+    data_dir: Path,
+    *,
+    scratch_dir: Path,
+    threads: int = 8,
+    memory_limit: str = "32GB",
+) -> dict[str, Any]:
+    """Build the side table from a validated, unchanged whole-interface export."""
+    output = data_dir / INTERFACE_SIMILARITY_EXPORT_RELATIVE
+    manifest = output.with_suffix(output.suffix + ".json")
+    full = cast(dict[str, Any], json.loads(manifest.read_text()))
+    if (
+        full.get("status") != "complete"
+        or full.get("interface_plan")
+        != _source_signature(data_dir / INTERFACE_SCORE_PLAN_RELATIVE)
+        or full.get("output") != _source_signature(output)
+        or not pq.read_schema(output).equals(schemas.INTERFACE_SIMILARITY_EXPORT_SCHEMA)
+        or pq.ParquetFile(output).metadata.num_rows != full.get("row_count")
+    ):
+        raise ValueError("whole-interface export is not a current reference")
+
+    sources = cast(list[dict[str, Any]], full["sources"])
+    expected_shards = (
+        pd.read_parquet(data_dir / INTERFACE_SCORE_WORK_RELATIVE, columns=["shard"])[
+            "shard"
+        ]
+        .astype(str)
+        .tolist()
+    )
+    if [source["shard"] for source in sources] != expected_shards:
+        raise ValueError("whole-interface export does not cover planned score shards")
+    for source in sources:
+        path = (
+            data_dir
+            / INTERFACE_SCORE_ROOT_RELATIVE
+            / f"shard={source['shard']}.parquet"
+        )
+        if (
+            _source_signature(path)
+            != {key: source[key] for key in ("path", "size", "mtime_ns")}
+            or not pq.read_schema(path).equals(schemas.INTERFACE_SCORE_SHARD_SCHEMA)
+            or pq.ParquetFile(path).metadata.num_rows != source["rows"]
+        ):
+            raise ValueError(f"interface score shard changed after export: {path}")
+    return _finalize_interface_half_similarity_scores(
+        data_dir,
+        sources=sources,
+        full_rows=int(full["row_count"]),
+        scratch_dir=scratch_dir,
+        threads=threads,
+        memory_limit=memory_limit,
+    )
+
+
 def finalize_interface_similarity_scores(
     data_dir: Path,
     *,
@@ -6479,12 +6724,21 @@ def finalize_interface_similarity_scores(
                 current.get("interface_plan")
                 == _source_signature(data_dir / INTERFACE_SCORE_PLAN_RELATIVE)
                 and current.get("sources") == sources
+                and current.get("ordering") == "query_target_similarity"
                 and current.get("output") == _source_signature(output)
                 and pq.read_schema(output).equals(
                     schemas.INTERFACE_SIMILARITY_EXPORT_SCHEMA
                 )
             ):
-                return current
+                half = _finalize_interface_half_similarity_scores(
+                    data_dir,
+                    sources=sources,
+                    full_rows=int(current["row_count"]),
+                    scratch_dir=scratch_dir,
+                    threads=threads,
+                    memory_limit=memory_limit,
+                )
+                return {**current, "half_row_count": half["row_count"]}
         except (OSError, TypeError, ValueError):
             pass
 
@@ -6562,6 +6816,18 @@ def finalize_interface_similarity_scores(
     if pq.ParquetFile(local_output).metadata.num_rows != rows:
         local_output.unlink(missing_ok=True)
         raise ValueError("compact interface score export row count changed")
+    if observed_paths:
+        sorted_output = scratch_dir / f"{output.name}.sorted.tmp"
+        sorted_output.unlink(missing_ok=True)
+        try:
+            _sort_interface_export(
+                local_output,
+                sorted_output,
+                columns=("query_system", "target_system", "similarity"),
+            )
+            sorted_output.replace(local_output)
+        finally:
+            sorted_output.unlink(missing_ok=True)
     output.parent.mkdir(exist_ok=True, parents=True)
     install = output.with_suffix(output.suffix + ".tmp")
     copyfile(local_output, install)
@@ -6571,6 +6837,7 @@ def finalize_interface_similarity_scores(
         "status": "complete",
         "metric": "interface_qcov",
         "direction": "query_system_to_target_system",
+        "ordering": "query_target_similarity",
         "interface_plan": _source_signature(data_dir / INTERFACE_SCORE_PLAN_RELATIVE),
         "sources": sources,
         "shard_count": len(sources),
@@ -6580,7 +6847,15 @@ def finalize_interface_similarity_scores(
         "output": _source_signature(output),
     }
     write_json_atomic(release_manifest, report)
-    return report
+    half = _finalize_interface_half_similarity_scores(
+        data_dir,
+        sources=sources,
+        full_rows=rows,
+        scratch_dir=scratch_dir,
+        threads=threads,
+        memory_limit=memory_limit,
+    )
+    return {**report, "half_row_count": half["row_count"]}
 
 
 def export_ligand_similarity_scores_batch(
@@ -6641,11 +6916,24 @@ def export_ligand_similarity_scores_batch(
         if output.is_file() and manifest.is_file():
             try:
                 payload = json.loads(manifest.read_text())
+                stored_inputs = payload.get("inputs")
                 if (
-                    payload.get("inputs") == inputs
-                    and payload.get("output") == _source_signature(output)
+                    isinstance(stored_inputs, dict)
+                    and all(
+                        _same_file_signature(stored_inputs.get(name), signature)
+                        for name, signature in inputs.items()
+                    )
+                    and _same_file_signature(
+                        payload.get("output"), _source_signature(output)
+                    )
                     and pq.read_schema(output).equals(expected_schema)
                 ):
+                    if payload.get("inputs") != inputs or payload.get(
+                        "output"
+                    ) != _source_signature(output):
+                        payload["inputs"] = inputs
+                        payload["output"] = _source_signature(output)
+                        write_json_atomic(manifest, payload)
                     reports.append(payload)
                     exported_rows += int(payload["rows"])
                     LOG.info(
@@ -6689,6 +6977,8 @@ def export_ligand_similarity_scores_batch(
                     pairs.pocket_qcov,
                     pairs.pocket_fident_qcov,
                     pairs.pli_qcov,
+                    round(shape.shape * 100)::TINYINT AS shape,
+                    round(shape.color * 100)::TINYINT AS color,
                     round(shape.sucos_shape * 100)::TINYINT AS sucos_shape
                 FROM read_parquet('{pair_path.as_posix()}') AS pairs
                 LEFT JOIN read_parquet('{shape_path.as_posix()}') AS shape
@@ -6891,6 +7181,16 @@ def finalize_ligand_similarity_scores(
                         WHEN coalesce(ligand_is_shape_comparable, false)
                         THEN 100::TINYINT
                         ELSE NULL::TINYINT
+                    END AS shape,
+                    CASE
+                        WHEN coalesce(ligand_is_shape_comparable, false)
+                        THEN 100::TINYINT
+                        ELSE NULL::TINYINT
+                    END AS color,
+                    CASE
+                        WHEN coalesce(ligand_is_shape_comparable, false)
+                        THEN 100::TINYINT
+                        ELSE NULL::TINYINT
                     END AS sucos_shape
                 FROM read_parquet('{annotation_path.as_posix()}')
                 WHERE system_type = 'holo'
@@ -6927,7 +7227,14 @@ def finalize_ligand_similarity_scores(
     local_output.unlink(missing_ok=True)
     report = {
         "status": "complete",
-        "metrics": ["pocket_qcov", "pocket_fident_qcov", "pli_qcov", "sucos_shape"],
+        "metrics": [
+            "pocket_qcov",
+            "pocket_fident_qcov",
+            "pli_qcov",
+            "shape",
+            "color",
+            "sucos_shape",
+        ],
         "sources": sources,
         "annotation": annotation_signature,
         "self_row_count": self_rows,
@@ -7169,6 +7476,7 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--memory-limit", default="32GB")
         if name in {"score-interface-shards", "score-interface-repair-batches"}:
             command.add_argument("--side-coverage-buckets", type=int, default=32)
+            command.add_argument("--assignment-target-buckets", type=int, default=1)
         if name == "score-interface-repair-batches":
             command.add_argument("--repair-batches-per-task", type=int, default=1)
         if name == "score-ligand-pocket-shards":
@@ -7206,6 +7514,11 @@ def _parser() -> argparse.ArgumentParser:
     interface_finalizer.add_argument("--scratch-dir", type=Path, required=True)
     interface_finalizer.add_argument("--threads", type=int, default=8)
     interface_finalizer.add_argument("--memory-limit", default="32GB")
+    interface_half_finalizer = subparsers.add_parser("finalize-interface-half-scores")
+    interface_half_finalizer.add_argument("data_dir", type=Path)
+    interface_half_finalizer.add_argument("--scratch-dir", type=Path, required=True)
+    interface_half_finalizer.add_argument("--threads", type=int, default=8)
+    interface_half_finalizer.add_argument("--memory-limit", default="32GB")
     interface_repair_finalizer = subparsers.add_parser(
         "finalize-interface-score-repair"
     )
@@ -7428,6 +7741,13 @@ def main() -> None:
             threads=args.threads,
             memory_limit=args.memory_limit,
         )
+    elif args.command == "finalize-interface-half-scores":
+        result = finalize_interface_half_similarity_scores(
+            data_dir,
+            scratch_dir=args.scratch_dir.resolve(),
+            threads=args.threads,
+            memory_limit=args.memory_limit,
+        )
     elif args.command == "finalize-interface-score-repair":
         result = finalize_interface_score_repair(
             data_dir,
@@ -7448,6 +7768,7 @@ def main() -> None:
             threads=args.threads,
             memory_limit=args.memory_limit,
             side_coverage_bucket_count=args.side_coverage_buckets,
+            assignment_target_bucket_count=args.assignment_target_buckets,
             force_update=args.force,
         )
     elif args.command == "score-interface-repair-batches":
@@ -7468,6 +7789,7 @@ def main() -> None:
                     threads=args.threads,
                     memory_limit=args.memory_limit,
                     side_coverage_bucket_count=args.side_coverage_buckets,
+                    assignment_target_bucket_count=args.assignment_target_buckets,
                     force_update=args.force,
                 )
             )

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=plinder-batch
-#SBATCH --partition=scicore,bigmem
-#SBATCH --qos=30min
+#SBATCH --partition=scicore-fast,scicore,bigmem
+#SBATCH --qos=fast,30min
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 

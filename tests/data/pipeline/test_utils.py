@@ -9,6 +9,18 @@ from plinder.core.scores.metrics import CHEMICAL_CLUSTER_SUMMARY_COLUMNS
 from plinder.data.pipeline import utils
 
 
+def _write_component_labels(tmp_path, metric, threshold, nodes, labels=None):
+    path = (
+        tmp_path
+        / "ligand_clusters/reductions"
+        / f"metric={metric}/labels/directed=false/threshold={threshold}.parquet"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {"ligand_id": nodes, "label": labels or [f"c{i}" for i in range(len(nodes))]}
+    ).to_parquet(path, index=False)
+
+
 @pytest.mark.parametrize(
     "funcname, run, skip, expect",
     [
@@ -92,6 +104,9 @@ def test_finalize_index_writes_local_clusters_to_sidecar(tmp_path):
             "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
             "ligand_is_proper": [True, False],
             "ligand_smiles": ["CCO", "CCO"],
+            "ligand_neighboring_residues": [["1.A:10", "1.A:11"], None],
+            "ligand__members": [{"1.X": [1]}, {"2.X": [1]}],
+            "system_pass_criteria": [None, None],
             "ligand_tanimoto_ecfp4_1024_90_cluster": ["legacy", "legacy"],
             "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": [1, 1],
         }
@@ -137,8 +152,20 @@ def test_finalize_index_writes_local_clusters_to_sidecar(tmp_path):
             "directed": [False],
         }
     ).to_parquet(tanimoto_cover_file, index=False)
-    utils.finalize_index(data_dir=tmp_path)
+    _write_component_labels(tmp_path, "tanimoto_similarity_ecfp4_1024", 90, ["0"])
+    _write_component_labels(tmp_path, "pli_qcov", 100, ["1aaa__1__1.X"])
+    arrow_finalized = utils.finalize_index(data_dir=tmp_path)
+    assert isinstance(
+        arrow_finalized["ligand_neighboring_residues"].dtype, pd.ArrowDtype
+    )
+    assert arrow_finalized["ligand_neighboring_residues"].iloc[0] == [
+        "1.A:10",
+        "1.A:11",
+    ]
+    assert pd.isna(arrow_finalized["ligand_neighboring_residues"].iloc[1])
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
+    assert "ligand__members" not in finalized
+    assert "system_pass_criteria" not in finalized
     clusters = pd.read_parquet(index_dir / "ligand_clusters.parquet")
     directed_labels = clusters["pli_qcov__100__ligand__directed_set_cover"]
     assert directed_labels.iloc[0] == "d0"
@@ -216,6 +243,47 @@ def test_finalize_index_preserves_annotation_when_staging_fails(tmp_path, monkey
     assert not (index_dir / "annotation_table.tmp.parquet").exists()
 
 
+def test_finalize_index_uses_weekly_cluster_assignments(tmp_path, monkeypatch):
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1aaa"],
+            "system_id": ["1aaa__1__1.A__1.X"],
+            "system_type": ["holo"],
+            "ligand_id": ["1aaa__1__1.X"],
+            "ligand_is_proper": [False],
+            "ligand_smiles": [None],
+            "ligand_is_shape_comparable": [False],
+        }
+    ).to_parquet(index_dir / "annotation_table.parquet", index=False)
+    fingerprints = tmp_path / "fingerprints"
+    fingerprints.mkdir()
+    pd.DataFrame(
+        {
+            "ligand_rdkit_canonical_smiles": pd.Series(dtype="string"),
+            "ligand_smiles_id": pd.Series(dtype="Int32"),
+        }
+    ).to_parquet(fingerprints / "ligand_similarity_annotations.parquet", index=False)
+    assignment = tmp_path / "weekly.parquet"
+    pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "pocket_qcov__50__ligand__directed_set_cover": ["fixed"],
+        }
+    ).to_parquet(assignment, index=False)
+    monkeypatch.setattr(
+        utils,
+        "build_ligand_cluster_table",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("full cover rebuilt")),
+    )
+
+    utils.finalize_index(data_dir=tmp_path, weekly_ligand_clusters=assignment)
+
+    clusters = pd.read_parquet(index_dir / "ligand_clusters.parquet")
+    assert clusters["pocket_qcov__50__ligand__directed_set_cover"].tolist() == ["fixed"]
+
+
 def test_cluster_index_rejects_non_tanimoto_set_cover(tmp_path):
     cover_file = (
         tmp_path / "ligand_sampling/set_cover/metric=pli_qcov" / "threshold=100.parquet"
@@ -265,6 +333,7 @@ def test_chemical_90_set_cover_counts_distinct_pdb_ids(tmp_path, metric, column)
             "ligand_smiles_id": [0, 1, 2],
         }
     )
+    _write_component_labels(tmp_path, metric, 90, ["0", "1", "2"])
 
     result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
@@ -304,6 +373,7 @@ def test_cluster_index_marks_only_directed_cover_centroids(tmp_path):
             "ligand_smiles_id": [0, 1, pd.NA],
         }
     )
+    _write_component_labels(tmp_path, "pli_qcov", 50, ["l1", "l2"], ["c0", "c0"])
 
     result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
@@ -347,7 +417,7 @@ def test_ligand_similarity_rejects_stale_proper_smiles_universe(tmp_path):
         utils.add_ligand_similarity_columns(index=index, data_dir=tmp_path)
 
 
-def test_ligand_similarity_rejects_artifact_from_before_targeted_repair(
+def test_ligand_similarity_reuses_matching_artifact_after_targeted_repair(
     tmp_path,
 ):
     fingerprint_dir = tmp_path / "fingerprints"
@@ -356,7 +426,7 @@ def test_ligand_similarity_rejects_artifact_from_before_targeted_repair(
     index_dir.mkdir()
     pd.DataFrame(
         {
-            "ligand_smiles": ["CC"],
+            "ligand_rdkit_canonical_smiles": ["CC"],
             "ligand_smiles_id": [0],
         }
     ).to_parquet(
@@ -370,9 +440,9 @@ def test_ligand_similarity_rejects_artifact_from_before_targeted_repair(
         {
             "system_type": ["holo"],
             "ligand_is_proper": [True],
-            "ligand_rdkit_canonical_smiles": ["CC"],
+            "ligand_smiles": ["CC"],
         }
     )
 
-    with pytest.raises(ValueError, match="predate"):
-        utils.add_ligand_similarity_columns(index=index, data_dir=tmp_path)
+    result = utils.add_ligand_similarity_columns(index=index, data_dir=tmp_path)
+    assert result["ligand_smiles_id"].tolist() == [0]

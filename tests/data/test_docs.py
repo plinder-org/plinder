@@ -182,7 +182,7 @@ def test_annotation_descriptions_follow_arrow_schema_order():
     annotation_schema = pa.schema(
         [
             ("ligand_id_legacy", pa.string()),
-            ("ligand__members", pa.struct([("1.A", pa.list_(pa.int64()))])),
+            ("ligand__is_multi_residue", pa.bool_()),
             ("ligand_member_asym_ids", pa.list_(pa.string())),
             ("system_id_legacy", pa.string()),
         ]
@@ -225,7 +225,10 @@ def test_annotation_descriptions_follow_arrow_schema_order():
         for name, _, description in System.document_properties("system")
     }
     assert by_name["ligand_id_legacy"] == ligand_descriptions["ligand_id_legacy"]
-    assert by_name["ligand__members"] == ligand_descriptions["ligand__members"]
+    assert (
+        by_name["ligand__is_multi_residue"]
+        == ligand_descriptions["ligand__is_multi_residue"]
+    )
     assert (
         by_name["ligand_member_asym_ids"]
         == ligand_descriptions["ligand_member_asym_ids"]
@@ -266,6 +269,8 @@ def test_annotation_descriptions_reject_repeated_entry_metadata():
         "system_id_no_biounit",
         "system_ligand_chains",
         "ligand_rdkit_canonical_smiles",
+        "ligand__members",
+        "system_pass_criteria",
         "system_protein_chains_auth_id",
         "system_protein_chains_validation_average_rsr",
         "system_ligand_validation_average_rsr",
@@ -418,8 +423,11 @@ def test_table_descriptions_accept_published_interface_cover_columns():
 
     names = [
         "interface_qcov__50__directed_set_cover",
+        "interface_qcov__50__reciprocal_component",
         "interface_side_qcov__50__chain_1_directed_set_cover",
+        "interface_side_qcov__50__chain_1_reciprocal_component",
         "interface_side_qcov__50__chain_2_directed_set_cover",
+        "interface_side_qcov__50__chain_2_reciprocal_component",
     ]
     descriptions = docs.get_table_column_descriptions(
         table_name="interface_clusters",
@@ -427,6 +435,13 @@ def test_table_descriptions_accept_published_interface_cover_columns():
     )
 
     assert descriptions["Name"].tolist() == names
+    assert (
+        "both directions"
+        in descriptions.loc[
+            descriptions["Name"].eq("interface_qcov__50__reciprocal_component"),
+            "Description",
+        ].iat[0]
+    )
 
 
 @pytest.mark.parametrize(
@@ -489,7 +504,9 @@ def test_checked_in_cluster_descriptions_match_published_cover_modes():
         "__component" in name or "__community" in name for name in ligand_cluster_names
     )
     for name in ligand_cluster_names:
-        if is_chemical_cluster_metric(name.split("__", maxsplit=1)[0]):
+        if name.endswith("__reciprocal_component"):
+            assert "__ligand__reciprocal_component" in name
+        elif is_chemical_cluster_metric(name.split("__", maxsplit=1)[0]):
             assert "__ligand__set_cover" in name
             assert "__directed_set_cover" not in name
         else:
@@ -504,7 +521,10 @@ def test_checked_in_cluster_descriptions_match_published_cover_modes():
         if name.startswith(("interface_qcov__", "interface_side_qcov__"))
     ]
     assert interface_cluster_names
-    assert all("directed_set_cover" in name for name in interface_cluster_names)
+    assert all(
+        "directed_set_cover" in name or name.endswith("reciprocal_component")
+        for name in interface_cluster_names
+    )
     assert not any(
         "__component" in name or "__community" in name
         for name in interface_cluster_names

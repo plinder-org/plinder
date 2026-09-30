@@ -347,7 +347,8 @@ def test_component_score_batches_read_reciprocal_minimum_edges(tmp_path):
     ]
 
 
-def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
+@pytest.mark.parametrize("compact", [False, True])
+def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path, compact):
     from plinder.data.clusters import (
         make_directed_cover_component_reduction,
         make_directed_set_cover,
@@ -359,7 +360,11 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
 
     metric = "sucos_shape_pocket_qcov"
     index_dir = tmp_path / "index"
-    score_dir = tmp_path / "scores" / "search_db=holo"
+    score_dir = (
+        tmp_path / "exports" / "ligand_similarity_scores"
+        if compact
+        else tmp_path / "scores" / "search_db=holo"
+    )
     index_dir.mkdir(parents=True)
     score_dir.mkdir(parents=True)
     pd.DataFrame(
@@ -374,7 +379,7 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
             "system_pass_validation_criteria": [True, False, True, False],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
-    pd.DataFrame(
+    scores = pd.DataFrame(
         {
             "query_system": ["s1", "s1", "s2", "s1", "s4"],
             "query_ligand_id": ["l1", "l1", "l2", "l1", "l4"],
@@ -383,7 +388,13 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
             "metric": [metric] * 5,
             "similarity": [80, 75, 60, 90, 85],
         }
-    ).to_parquet(score_dir / "part.parquet", index=False)
+    )
+    if compact:
+        scores = scores.drop(columns="metric").rename(
+            columns={"similarity": "sucos_shape"}
+        )
+        scores["pocket_qcov"] = 100
+    scores.to_parquet(score_dir / "part.parquet", index=False)
     plan = prepare_symmetric_edge_plan(
         data_dir=tmp_path,
         metrics=[metric],
@@ -920,6 +931,157 @@ def test_directed_cover_uses_query_to_centroid_scores_and_reassigns():
     ]
 
 
+@pytest.mark.parametrize("primary_threshold", [30, 50, 90, 100])
+def test_indexed_cover_components_preserve_assignments(primary_threshold, tmp_path):
+    from plinder.data.clusters import (
+        _build_outgoing_edge_index,
+        _greedy_indexed_directed_set_cover,
+        _IncomingEdgeIndex,
+    )
+
+    # Two disconnected components and an isolate, with interleaved node IDs.
+    # Strict edges exhaust their gain before the relaxed pass covers all nodes.
+    nodes = ["a", "b", "c", "d", "e", "f", "g"]
+    incoming = [[], [], [(0, 95), (4, 55)], [(1, 90), (5, 60)], [], [], []]
+    index = _IncomingEdgeIndex(
+        offsets=np.asarray([0, 0, 0, 2, 4, 4, 4, 4], dtype=np.int64),
+        queries=np.asarray(
+            [q for edges in incoming for q, _ in edges], dtype=np.uint32
+        ),
+        similarities=np.asarray(
+            [s for edges in incoming for _, s in edges], dtype=np.uint8
+        ),
+    )
+    fallback = min(primary_threshold, 50)
+
+    def gains(threshold):
+        return np.asarray(
+            [1 + sum(s >= threshold for _, s in edges) for edges in incoming]
+        )
+
+    kwargs = dict(
+        primary_threshold=primary_threshold,
+        fallback_threshold=fallback,
+        primary_gains=gains(primary_threshold),
+        fallback_gains=gains(fallback),
+        outgoing_index=_build_outgoing_edge_index(
+            index,
+            target_index_path=tmp_path / "targets.bin",
+            similarity_index_path=tmp_path / "scores.bin",
+        ),
+    )
+    global_result = _greedy_indexed_directed_set_cover(index, nodes, **kwargs)
+    component_result = _greedy_indexed_directed_set_cover(
+        index, nodes, components=np.asarray([0, 1, 0, 1, 0, 1, 2]), **kwargs
+    )
+    for expected, actual in zip(global_result[1:], component_result[1:]):
+        np.testing.assert_array_equal(actual, expected)
+    assert sorted(
+        (s.representative, s.threshold, s.marginal_gain) for s in component_result[0]
+    ) == sorted(
+        (s.representative, s.threshold, s.marginal_gain) for s in global_result[0]
+    )
+
+
+def test_indexed_cover_preserves_selected_centroids_in_perfect_ties(tmp_path):
+    from plinder.data.clusters import (
+        _build_outgoing_edge_index,
+        _greedy_indexed_directed_set_cover,
+        _IncomingEdgeIndex,
+    )
+
+    index = _IncomingEdgeIndex(
+        offsets=np.asarray([0, 3, 4, 4, 4, 4], dtype=np.int64),
+        queries=np.asarray([1, 2, 3, 4], dtype=np.uint32),
+        similarities=np.asarray([100, 100, 100, 100], dtype=np.uint8),
+    )
+    selections, representatives, similarities, _ = _greedy_indexed_directed_set_cover(
+        index,
+        ["a", "b", "c", "d", "e"],
+        primary_threshold=100,
+        fallback_threshold=50,
+        primary_gains=np.asarray([4, 2, 1, 1, 1]),
+        fallback_gains=np.asarray([4, 2, 1, 1, 1]),
+        components=np.zeros(5, dtype=np.uint32),
+        outgoing_index=_build_outgoing_edge_index(
+            index,
+            target_index_path=tmp_path / "targets.bin",
+            similarity_index_path=tmp_path / "scores.bin",
+        ),
+    )
+    assert [selection.representative for selection in selections] == [0, 1]
+    np.testing.assert_array_equal(representatives, [0, 1, 0, 0, 1])
+    np.testing.assert_array_equal(similarities, [100, 100, 100, 100, 100])
+
+
+@pytest.mark.parametrize("threshold", [30, 50, 70, 90, 100])
+def test_incremental_cover_matches_reference_without_candidate_rescans(
+    threshold, tmp_path, monkeypatch
+):
+    from plinder.data.clusters import (
+        _build_outgoing_edge_index,
+        _greedy_directed_set_cover,
+        _greedy_indexed_directed_set_cover,
+        _IncomingEdgeIndex,
+    )
+
+    rng = np.random.default_rng(42)
+    size = 60
+    nodes = [f"{i:03d}" for i in range(size)]
+    incoming = [[] for _ in nodes]
+    graph = nk.Graph(size, weighted=True, directed=True)
+    for target in range(size):
+        for query in rng.choice(size, size=20, replace=False):
+            if query != target:
+                score = int(rng.integers(30, 101))
+                incoming[target].append((query, score))
+                graph.addEdge(int(query), target, score / 100)
+    index = _IncomingEdgeIndex(
+        offsets=np.r_[0, np.cumsum([len(edges) for edges in incoming])],
+        queries=np.asarray(
+            [q for edges in incoming for q, _ in edges], dtype=np.uint32
+        ),
+        similarities=np.asarray(
+            [s for edges in incoming for _, s in edges], dtype=np.uint8
+        ),
+    )
+    outgoing = _build_outgoing_edge_index(
+        index,
+        target_index_path=tmp_path / "targets.bin",
+        similarity_index_path=tmp_path / "scores.bin",
+    )
+    calls = 0
+    original = _IncomingEdgeIndex.incoming
+
+    def counted(self, *args):
+        nonlocal calls
+        calls += 1
+        return original(self, *args)
+
+    monkeypatch.setattr(_IncomingEdgeIndex, "incoming", counted)
+    fallback = min(threshold, 50)
+
+    def gains(t):
+        return np.asarray([1 + sum(s >= t for _, s in edges) for edges in incoming])
+
+    primary_gains = gains(threshold)
+    actual = _greedy_indexed_directed_set_cover(
+        index,
+        nodes,
+        primary_threshold=threshold,
+        fallback_threshold=fallback,
+        primary_gains=primary_gains,
+        fallback_gains=gains(fallback),
+        outgoing_index=outgoing,
+    )
+    expected, _ = _greedy_directed_set_cover(
+        graph, nodes, primary_threshold=threshold, fallback_threshold=fallback
+    )
+    assert actual[0] == expected
+    assert calls <= 2 * len(expected)
+    np.testing.assert_array_equal(primary_gains, gains(threshold))
+
+
 def test_directed_cover_falls_back_to_relaxed_edges_when_strict_gain_ends():
     from plinder.data.clusters import _greedy_directed_set_cover
 
@@ -1251,6 +1413,19 @@ def test_ligand_covers_are_merged_without_system_projection(tmp_path):
         }
     ).to_parquet(directed_cover, index=False)
 
+    component_path = (
+        tmp_path
+        / "ligand_clusters/reductions/metric=sucos_shape_pocket_qcov"
+        / "labels/directed=false/threshold=50.parquet"
+    )
+    component_path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "ligand_id": [ligand_a1, ligand_a2, ligand_b, ligand_c],
+            "label": ["c0", "c1", "c0", "c2"],
+        }
+    ).to_parquet(component_path, index=False)
+
     finalized = finalize_index(data_dir=tmp_path)
     cluster_table = pd.read_parquet(index_dir / "ligand_clusters.parquet")
     ligand_column = "sucos_shape_pocket_qcov__50__ligand__directed_set_cover"
@@ -1260,6 +1435,11 @@ def test_ligand_covers_are_merged_without_system_projection(tmp_path):
     assert finalized_labels[ligand_a1] == finalized_labels[ligand_b]
     assert finalized_labels[ligand_a2] != finalized_labels[ligand_a1]
     assert pd.isna(finalized_labels[ligand_d])
+    component_column = "sucos_shape_pocket_qcov__50__ligand__reciprocal_component"
+    components = cluster_table.set_index("ligand_id")[component_column]
+    assert components[ligand_a1] == components[ligand_b]
+    assert components[ligand_a2] != components[ligand_a1]
+    assert pd.isna(components[ligand_d])
     centroid_column = f"{ligand_column}__is_centroid"
     finalized_centroids = cluster_table.set_index("ligand_id")[centroid_column]
     assert bool(finalized_centroids[ligand_a1])

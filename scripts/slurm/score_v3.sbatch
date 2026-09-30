@@ -269,6 +269,7 @@ case "${MODE}" in
         fi
         if [[ "${MODE}" == "score-interface-shards" || "${MODE}" == "score-interface-repair-batches" ]]; then
             ARGS+=(--side-coverage-buckets "${PLINDER_INTERFACE_SIDE_COVERAGE_BUCKETS:-32}")
+            ARGS+=(--assignment-target-buckets "${PLINDER_INTERFACE_TARGET_BUCKETS:-1}")
         fi
         if [[ "${MODE}" == "score-interface-repair-batches" ]]; then
             ARGS+=(

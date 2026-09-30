@@ -34,7 +34,7 @@ plinder_download = "plinder.core.index.utils:download_plinder_cmd"
 plinder_eval = "plinder.eval.cli:main"
 
 [project.optional-dependencies]
-data = ["google-cloud-storage", "gcsfs"]
+data = ["google-cloud-storage", "gcsfs", "numba"]
 lint = [
     "ruff == 0.9.4",
     "pre-commit == 2.21.0",

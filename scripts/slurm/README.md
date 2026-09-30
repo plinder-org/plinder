@@ -616,6 +616,6 @@ sbatch \
 
 The release scoring artifacts are the two similarity tables in `exports/` and
 the validated alignment shards under
-`alignments/search_db=holo/alignment_type=*/shard=*.parquet`. Per-PDB raw
+`alignment_cigars/search_db=holo/alignment_type=*/shard=*.parquet`. Per-PDB raw
 search files and the other derived score datasets are generation intermediates;
 mapped per-PDB files exist only transiently on node-local scratch.

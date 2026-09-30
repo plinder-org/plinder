@@ -142,6 +142,7 @@ def test_scoring_regression(scoring_fixture, tmp_path):
                 "selected_residue_numbers": [
                     number for _, number in sorted(index_to_number.items())
                 ],
+                "selected_residue_indices": sorted(index_to_number),
             }
             for entry in entries.values()
             for chain_asym_id, index_to_number in (
