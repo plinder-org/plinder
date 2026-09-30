@@ -45,19 +45,12 @@ differ from the current release.
     ├── ligand_archives/
     │   ├── {two_char_code}.parquet
     │   └── manifest.json
-    ├── alignments/
-    │   └── search_db=holo/
-    │       └── alignment_type={foldseek,mmseqs}/
-    │           └── shard={two_char_code}.parquet
     ├── alignment_cigars/
     │   └── search_db=holo/
     │       └── alignment_type={foldseek,mmseqs}/
     │           └── shard={two_char_code}.parquet
     ├── ligand_scores/
     │   └── {fragment}.parquet
-    ├── interface_scores/
-    │   ├── shard={two_char_code}.parquet
-    │   └── shard={two_char_code}.json
     ├── ligand_sampling/
     │   ├── set_cover/metric={metric}/threshold={threshold}.parquet
     │   └── directed_set_cover/metric={metric}/threshold={threshold}.parquet
@@ -70,6 +63,7 @@ differ from the current release.
     └── exports/
         ├── ligand_similarity_scores.parquet
         ├── interface_similarity_scores.parquet
+        ├── interface_half_similarity_scores.parquet
         └── protein_similarity_scores/
             └── alignment_type={foldseek,mmseqs}/
                 └── shard={two_char_code}.parquet
@@ -241,19 +235,18 @@ chain-pair scores, including query and target coverage, sequence identity,
 sequence similarity, and Foldseek lDDT. Percentage values are stored as
 integers from 0 to 100.
 
-The optional `alignments/` files contain the residue mappings used for pocket,
-protein-ligand interaction, and protein-interface scores. Residues are stored
-as compact chain-relative positions into `alignment_chain_lookup`, and residue
-identity flags are bit-packed. Positions are one-based; a target position of
-zero means that no selected target residue was aligned.
+The optional `alignment_cigars/` files contain full-chain CIGARs, alignment
+starts, and bit-packed residue identity flags. Holo chain-pair statistics are
+read from `exports/protein_similarity_scores/`.
+Pocket, protein-ligand interaction, and protein-interface residue mappings
+are recovered from these CIGARs and `alignment_chain_lookup` when needed.
 
 `plinder.core.scores.query_chain_overlap()` reports the overlapping and total
 residue counts for either ligand pockets or protein interfaces on a requested
 pair of chains. It also reports the overlap fractions and the number of
 identical residues for each available alignment backend.
 
-Full-chain CIGARs are kept separately in the optional `alignment_cigars/`
-files. `plinder.core.scores.map_chain_alignment()` reads one chain pair and
+`plinder.core.scores.map_chain_alignment()` reads one chain pair and
 expands its CIGARs into residue positions. MMseqs rows use one-based SEQRES
 positions, while Foldseek rows use zero-based indices over the resolved
 coordinate residues. Gap rows can be retained or omitted.
@@ -277,6 +270,10 @@ values in `annotation`.
 `exports/interface_similarity_scores.parquet` contains the complete directed
 interface table with `iface1_qcov`, `iface2_qcov`, and their combined
 `similarity` value. Swapping query and target can change the coverage.
+`exports/interface_half_similarity_scores.parquet` contains directed coverage
+scores of at least 30 between individual interface sides, identified by IDs ending
+in `::side=1` or `::side=2`. Use `query_interface_similarity()` or
+`query_half_interface_similarity()` to filter these tables from Python.
 
 (representative-cover-reference)=
 
@@ -305,6 +302,18 @@ detailed file records `representative_selection_threshold` and
 `assignment_threshold`, so downstream selection can distinguish strict and
 fallback assignments. It also records selection order, marginal gain, and each
 node's potential coverage count and fraction.
+
+Between full clustering runs, weekly updates keep existing representatives and
+cluster IDs. Changed chains, ligands, and interfaces are compared with those
+representatives; a qualifying match joins an existing cluster, while an
+unmatched item starts a new one. The detailed cover files describe the last
+full clustering run; the index cluster tables include weekly assignments.
+
+The cluster tables also contain `__reciprocal_component` IDs. Two items share
+one ID when a path of similarities meeting the threshold in both directions
+connects them; they need not be directly similar. Weekly additions receive
+cover assignments immediately, while their component IDs await the next full
+clustering run.
 
 ## Custom-scoring databases
 
