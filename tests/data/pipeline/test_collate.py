@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from plinder.data.annotations.affinity import publish_affinity_tables
 from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     MIN_INTERFACE_RESIDUES_METADATA_KEY,
@@ -33,6 +34,25 @@ from plinder.data.pipeline.collate import (
     run_collation,
     start_collation_plan,
 )
+
+
+def test_merge_parquet_shards_combines_small_row_groups(tmp_path: Path) -> None:
+    schema = pa.schema([("id", pa.int32()), ("tags", pa.list_(pa.string()))])
+    shards = []
+    for index in range(20):
+        path = tmp_path / f"shard-{index}.parquet"
+        pq.write_table(pa.table({"id": pa.array([index], type=pa.int32())}), path)
+        shards.append(path)
+
+    output = tmp_path / "merged.parquet"
+    collate_module._merge_parquet_shards(shards, output, schema, row_group_size=10)
+    metadata = pq.read_metadata(output)
+    assert metadata.num_rows == 20
+    assert metadata.num_row_groups == 2
+    table = pq.read_table(output)
+    assert table.schema.equals(schema)
+    assert table["id"].to_pylist() == list(range(20))
+    assert table["tags"].null_count == 20
 
 
 def _write_entry(
@@ -247,6 +267,7 @@ def entry_update_case(tmp_path, monkeypatch):
             pd.DataFrame(columns=columns).to_parquet(path, index=False)
         else:
             path.write_text("{}")
+    publish_affinity_tables(base)
     root = tmp_path / "nextgen"
     (root / "holdings").mkdir(parents=True)
     revisions = {"1abc": (2, 0), "3ghi": (1, 0), "4jkl": (1, 0)}
@@ -323,6 +344,18 @@ def _index_bytes(root):
         for path in (root / "index").glob("*")
         if path.is_file()
     }
+
+
+def test_weekly_update_rejects_plan_for_other_base_revision(
+    entry_update_case, monkeypatch
+):
+    _, args, _ = entry_update_case
+    plan, entries = updates.load_update_plan(args["plan_dir"])
+    entries.loc[entries.pdb_id.eq("1abc"), "previous_minor_revision"] = 99
+    monkeypatch.setattr(update_entries, "load_update_plan", lambda _: (plan, entries))
+
+    with pytest.raises(ValueError, match="base entry revisions"):
+        update_entries.apply_entry_update(**args)
 
 
 def test_weekly_entry_update_matches_full_collation(entry_update_case, tmp_path):
@@ -588,13 +621,12 @@ def test_weekly_update_does_not_reuse_missing_marker(entry_update_case):
         update_entries.apply_entry_update(**args)
 
 
-def test_weekly_update_preserves_nested_residue_mappings(
-    entry_update_case, monkeypatch
-):
+def test_weekly_update_preserves_nested_residue_lists(entry_update_case, monkeypatch):
     base, args, _ = entry_update_case
     path = base / "index/annotation_table.parquet"
     frame = pd.read_parquet(path)
-    frame["ligand__members"] = [{"1.L": [3, 4]} for _ in range(len(frame))]
+    frame["ligand_residue_numbers"] = [[3, 4] for _ in range(len(frame))]
+    frame["ligand_instance_chains"] = [["1.L"] for _ in range(len(frame))]
     frame.to_parquet(path, index=False)
     original = update_entries.ingest_pdb_batch
 
@@ -609,6 +641,8 @@ def test_weekly_update_preserves_nested_residue_mappings(
             )
             rows = pd.read_parquet(path)
             rows["ligand__members"] = [{"2.NEW": [5, 6]} for _ in range(len(rows))]
+            rows["ligand_residue_numbers"] = [[5, 6] for _ in range(len(rows))]
+            rows["ligand_instance_chains"] = [["2.NEW"] for _ in range(len(rows))]
             rows.to_parquet(path, index=False)
         return result
 
@@ -616,15 +650,15 @@ def test_weekly_update_preserves_nested_residue_mappings(
     before = _index_bytes(base)
     update_entries.apply_entry_update(**args)
     rows = pd.read_parquet(args["output_dir"] / "index/annotation_table.parquet")
+    assert "ligand__members" not in rows
     for row in rows.itertuples(index=False, name=None):
         mapping = dict(zip(rows.columns, row))
-        residues = mapping["ligand__members"]
         if mapping["entry_pdb_id"] == "3ghi":
-            assert list(residues["1.L"]) == [3, 4]
-            assert residues["2.NEW"] is None
+            assert list(mapping["ligand_residue_numbers"]) == [3, 4]
+            assert list(mapping["ligand_instance_chains"]) == ["1.L"]
         else:
-            assert list(residues["2.NEW"]) == [5, 6]
-            assert residues["1.L"] is None
+            assert list(mapping["ligand_residue_numbers"]) == [5, 6]
+            assert list(mapping["ligand_instance_chains"]) == ["2.NEW"]
     assert _index_bytes(base) == before
 
 
@@ -674,6 +708,22 @@ def test_collation_preserves_failure_diagnostics(tmp_path):
         "entry_failed_assembly_ids"
         not in pq.read_schema(tmp_path / "index/annotation_table.parquet").names
     )
+
+
+def test_collation_types_empty_failed_assembly_ids_as_strings(tmp_path):
+    _write_release(tmp_path)
+    for pdb_id in ("1abc", "2def"):
+        path = (
+            tmp_path / "raw_entries" / pdb_id[1:3] / pdb_id / "entry_metadata.parquet"
+        )
+        metadata = pd.read_parquet(path)
+        metadata["entry_failed_assembly_ids"] = [[]]
+        metadata.to_parquet(path, index=False)
+
+    run_collation(tmp_path, memory_limit="1GB")
+
+    schema = pq.read_schema(tmp_path / "index/entry_metadata.parquet")
+    assert schema.field("entry_failed_assembly_ids").type == pa.list_(pa.string())
 
 
 def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
@@ -766,6 +816,8 @@ def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
         "system_id_no_biounit",
         "system_ligand_chains",
         "ligand_rdkit_canonical_smiles",
+        "ligand__members",
+        "system_pass_criteria",
     }
     assert retired_annotation_columns.isdisjoint(annotation.columns)
     assert "ligand_smiles" in annotation.columns

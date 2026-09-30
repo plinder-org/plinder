@@ -9,7 +9,7 @@ import pytest
 from plinder.core.utils.files import file_sha256, write_json_atomic
 from plinder.data.pipeline import collate, tasks, update_archives
 from plinder.data.pipeline.score import finalize_ligand_archives
-from plinder.data.pipeline.update_entries import _file_stats
+from plinder.data.pipeline.update_entries import _file_stats, _prepared_entry_outputs
 
 
 def _write_poses(root, poses):
@@ -30,6 +30,8 @@ def _write_tables(root, poses):
                 pa.array([asym for _, asym, _ in poses], type=pa.string()),
             )
         pq.write_table(table, path)
+    (root / "index/ligand_affinity.parquet").touch()
+    (root / "index/bindingdb_measurements.parquet").touch()
     write_json_atomic(root / "index/collation.json", {"status": "complete"})
 
 
@@ -54,10 +56,7 @@ def archive_update_case(tmp_path, request):
     expected = [row for row in original if row[0] in {"2abd", "4ghi"}] + added
     _write_tables(workspace, expected)
     _write_poses(workspace / ".incoming", added)
-    prepared = {
-        **collate.entry_table_paths(workspace),
-        "collation": workspace / "index/collation.json",
-    }
+    prepared = _prepared_entry_outputs(workspace)
     write_json_atomic(
         workspace / "entry_update.json",
         {
@@ -211,12 +210,7 @@ def test_archive_update_can_remove_every_ligand(archive_update_case):
     report = json.loads(marker.read_text())
     report["ingested_pdb_ids"] = []
     report["obsolete_pdb_ids"] = ["1abc", "2abd", "3def", "4ghi"]
-    report["outputs"] = _file_stats(
-        {
-            **collate.entry_table_paths(workspace),
-            "collation": workspace / "index/collation.json",
-        }
-    )
+    report["outputs"] = _file_stats(_prepared_entry_outputs(workspace))
     write_json_atomic(marker, report)
     before = file_sha256(base / "ligand_archives/manifest.json")
     archives = update_archives.update_ligand_archives(workspace, memory_limit="1GB")

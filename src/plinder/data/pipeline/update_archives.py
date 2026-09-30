@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 from plinder.core.utils.files import file_sha256, link_or_copy_file, write_json_atomic
 from plinder.data.pipeline import collate, tasks
 from plinder.data.pipeline.score import finalize_ligand_archives
-from plinder.data.pipeline.update_entries import _file_stats
+from plinder.data.pipeline.update_entries import _file_stats, _prepared_entry_outputs
 
 
 def update_ligand_archives(
@@ -38,10 +38,7 @@ def update_ligand_archives(
     base = Path(entries["base_release"]).resolve(strict=True)
     if workspace == base or base in workspace.parents:
         raise ValueError("update ligand archives outside the existing release")
-    prepared = {
-        **collate.entry_table_paths(workspace),
-        "collation": workspace / "index" / collate.FINAL_MARKER_NAME,
-    }
+    prepared = _prepared_entry_outputs(workspace)
     base_tables = collate.entry_table_paths(base)
     if (
         _file_stats(prepared) != entries["outputs"]

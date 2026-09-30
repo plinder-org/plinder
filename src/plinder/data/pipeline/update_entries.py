@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from shutil import copy2
 from typing import Any, Mapping
@@ -31,6 +32,15 @@ def _file_stats(paths: Mapping[str, Path]) -> dict[str, dict[str, int]]:
     }
 
 
+def _prepared_entry_outputs(root: Path) -> dict[str, Path]:
+    return {
+        **entry_table_paths(root),
+        "ligand_affinity": root / "index/ligand_affinity.parquet",
+        "bindingdb_measurements": root / "index/bindingdb_measurements.parquet",
+        "collation": root / "index" / collate.FINAL_MARKER_NAME,
+    }
+
+
 def _combine_tables(
     base: Path,
     incoming: Path | None,
@@ -43,20 +53,20 @@ def _combine_tables(
 ) -> dict[str, int]:
     """Replace complete entries, including their system-validation rows."""
     stage.mkdir(parents=True, exist_ok=True)
-    connection = duckdb.connect()
-    try:
-        collate._configure_duckdb(
-            connection,
-            threads=threads,
-            memory_limit=memory_limit,
-            scratch_dir=scratch_dir,
-        )
-        connection.register(
-            "removed_entries",
-            pa.table({"entry_pdb_id": pa.array(removed, type=pa.string())}),
-        )
-        counts = {}
-        for name, (filename, order_by) in ENTRY_TABLES.items():
+    workers = min(4, threads, len(ENTRY_TABLES))
+    removed_entries = pa.table({"entry_pdb_id": pa.array(removed, type=pa.string())})
+
+    def write_table(item: tuple[str, tuple[str, str]]) -> tuple[str, int]:
+        name, (filename, order_by) = item
+        connection = duckdb.connect()
+        try:
+            collate._configure_duckdb(
+                connection,
+                threads=max(1, threads // workers),
+                memory_limit=memory_limit,
+                scratch_dir=scratch_dir / name if scratch_dir is not None else None,
+            )
+            connection.register("removed_entries", removed_entries)
             connection.read_parquet(str(base / "index" / filename)).create_view(
                 "old_rows", replace=True
             )
@@ -72,18 +82,18 @@ def _combine_tables(
                     "new_rows", replace=True
                 )
                 query += " UNION ALL BY NAME SELECT * FROM new_rows"
-            counts[name] = int(
-                collate._fetch_scalar(connection, f"SELECT count(*) FROM ({query})")
-            )
             collate._copy_query(
                 connection,
                 f"SELECT * FROM ({query}) ORDER BY {order_by}",
                 stage / filename,
                 row_group_size=100_000,
             )
-        return counts
-    finally:
-        connection.close()
+            return name, int(pq.ParquetFile(stage / filename).metadata.num_rows)
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return dict(pool.map(write_table, ENTRY_TABLES.items()))
 
 
 def apply_entry_update(
@@ -115,6 +125,28 @@ def apply_entry_update(
     if output_dir == base or base in output_dir.parents:
         raise ValueError("write entry updates outside the existing release")
     base_tables = entry_table_paths(base)
+    previous = entries.loc[entries.action.isin(["revised", "obsolete"])].set_index(
+        "pdb_id"
+    )
+    if not previous.empty:
+        planned_revisions = previous[
+            ["previous_major_revision", "previous_minor_revision"]
+        ].rename(
+            columns={
+                "previous_major_revision": "source_mmcif_major_revision",
+                "previous_minor_revision": "source_mmcif_minor_revision",
+            }
+        )
+        installed_revisions = pd.read_parquet(
+            base_tables["entry_sources"],
+            columns=["entry_pdb_id", *planned_revisions.columns],
+        ).set_index("entry_pdb_id")
+        if (
+            not installed_revisions.reindex(planned_revisions.index)
+            .astype("Int64")
+            .equals(planned_revisions.astype("Int64"))
+        ):
+            raise ValueError("update plan does not match the base entry revisions")
     base_marker_path = base / "index" / collate.FINAL_MARKER_NAME
     base_marker = json.loads(base_marker_path.read_text())
     if base_marker["status"] != "complete":
@@ -145,24 +177,17 @@ def apply_entry_update(
         },
     }
     marker_path = output_dir / "entry_update.json"
-    prepared_paths = {
-        **entry_table_paths(output_dir),
-        "ligand_affinity": output_dir / "index" / "ligand_affinity.parquet",
-        "bindingdb_measurements": output_dir
-        / "index"
-        / "bindingdb_measurements.parquet",
-        "collation": output_dir / "index" / collate.FINAL_MARKER_NAME,
-    }
+    prepared_paths = _prepared_entry_outputs(output_dir)
     if output_dir.exists():
         if not marker_path.is_file():
             raise ValueError("output directory is not an entry-update workspace")
-        previous: dict[str, Any] = json.loads(marker_path.read_text())
-        if previous["inputs"] != binding:
+        previous_marker: dict[str, Any] = json.loads(marker_path.read_text())
+        if previous_marker["inputs"] != binding:
             raise ValueError("update inputs changed; use a new workspace")
-        if previous["status"] == collate.REPAIR_REQUIRED_STATUS:
-            if previous["outputs"] != _file_stats(prepared_paths):
+        if previous_marker["status"] == collate.REPAIR_REQUIRED_STATUS:
+            if previous_marker["outputs"] != _file_stats(prepared_paths):
                 raise ValueError("prepared entry tables changed; use a new workspace")
-            return previous
+            return previous_marker
     output_dir.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {
         "status": "preparing_entries",
@@ -255,7 +280,13 @@ def apply_entry_update(
         entry_table_paths(output_dir),
         output_dir / "index" / collate.FINAL_MARKER_NAME,
     )
-    publish_affinity_tables(output_dir, affinity_dir=base / "dbs" / "affinity")
+    publish_affinity_tables(
+        output_dir,
+        affinity_dir=base / "dbs" / "affinity",
+        base_dir=base,
+        changed_pdb_ids=changed.pdb_id.tolist(),
+        removed_pdb_ids=remove,
+    )
     report.update(
         status=collate.REPAIR_REQUIRED_STATUS,
         incoming_entries=str(incoming) if len(changed) else None,
