@@ -41,10 +41,10 @@ def _get_client() -> ReleaseClient:
     cfg = get_config().data
     if (cfg.plinder_bucket, cfg.plinder_release, cfg.plinder_release_number) != (
         "plinder",
-        "2024-06",
-        "v2",
+        "2026-09",
+        "",
     ):
-        raise ValueError("R2 downloads support only plinder/2024-06/v2")
+        raise ValueError("R2 downloads support only plinder/2026-09")
     remote = str(cfg.plinder_remote).rstrip("/")
     url = urlsplit(remote)
     if (

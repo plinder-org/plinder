@@ -20,9 +20,9 @@ def build(inventory: Path, destination: Path) -> int:
         with gzip.open(path, "rt") as stream:
             for line in stream:
                 r = json.loads(line)
-                if not r["name"].startswith("2024-06/v2/"):
+                if not r["name"].startswith("2026-09/"):
                     raise ValueError("Unexpected release")
-                key = r["name"][len("2024-06/v2/") :]
+                key = r["name"][len("2026-09/") :]
                 if key.endswith("/"):
                     continue
                 if (
