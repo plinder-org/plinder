@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
+
 from plinder.data import protein_clusters as clusters
 
 SEQUENCE = "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"

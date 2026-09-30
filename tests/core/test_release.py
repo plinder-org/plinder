@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+
 from plinder.core.release import RELEASE_PATHS, RELEASE_TABLES, PlinderRelease
 
 

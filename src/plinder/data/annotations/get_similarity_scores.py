@@ -2405,9 +2405,9 @@ class Scorer:
                 ),
             }
             if holo_protein_scores_mode is not None:
-                score_metadata[
-                    HOLO_PROTEIN_SCORES_METADATA_KEY
-                ] = holo_protein_scores_mode
+                score_metadata[HOLO_PROTEIN_SCORES_METADATA_KEY] = (
+                    holo_protein_scores_mode
+                )
             retained_metrics = score_metrics_metadata(score_metrics)
             if retained_metrics is not None:
                 score_metadata[SCORE_METRICS_METADATA_KEY] = retained_metrics
@@ -4152,14 +4152,14 @@ class Scorer:
                                 tuple(target_protein_chains),
                             )
                             if protein_cache_key not in self._protein_score_cache:
-                                self._protein_score_cache[
-                                    protein_cache_key
-                                ] = self.get_protein_scores(
-                                    query_target_entry_alignments,
-                                    query_system,
-                                    target_protein_chains,
-                                    query_protein_length,
-                                    query_protein_chains=query_protein_chains,
+                                self._protein_score_cache[protein_cache_key] = (
+                                    self.get_protein_scores(
+                                        query_target_entry_alignments,
+                                        query_system,
+                                        target_protein_chains,
+                                        query_protein_length,
+                                        query_protein_chains=query_protein_chains,
+                                    )
                                 )
                             (
                                 q_t_mappings,
@@ -4187,14 +4187,14 @@ class Scorer:
                                 ),
                             )
                             if unmatched_key not in unmatched_pocket_cache:
-                                unmatched_pocket_cache[
-                                    unmatched_key
-                                ] = self._cached_ligand_pair_pocket_scores(
-                                    query_target_entry_alignments,
-                                    query_ligand,
-                                    target_ligand,
-                                    str(target_entry),
-                                    pocket_score_cache,
+                                unmatched_pocket_cache[unmatched_key] = (
+                                    self._cached_ligand_pair_pocket_scores(
+                                        query_target_entry_alignments,
+                                        query_ligand,
+                                        target_ligand,
+                                        str(target_entry),
+                                        pocket_score_cache,
+                                    )
                                 )
                             (
                                 pocket_scores,

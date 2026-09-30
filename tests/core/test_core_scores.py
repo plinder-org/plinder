@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 import pandas as pd
 import pytest
+
 from plinder.core import PlinderRelease, query_table, scores
 from plinder.core.scores import ligand as ligand_module
 
@@ -320,6 +321,7 @@ def test_map_chain_alignment_reads_optional_cigar_shard(similarity_release):
 @pytest.mark.parametrize("source", ["foldseek", "mmseqs"])
 def test_cigar_sparse_decoders_agree(similarity_release, source):
     import duckdb
+
     from plinder.core.scores.mapping import (
         cigar_alignment_sql,
         decode_cigar_residue_positions,
