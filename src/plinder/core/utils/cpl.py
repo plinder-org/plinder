@@ -14,6 +14,24 @@ from plinder.core.utils.r2 import ReleaseClient, checked_key, manifest
 T = TypeVar("T")
 
 
+def is_offline() -> bool:
+    """Return whether remote access is disabled.
+
+    ``PLINDER_OFFLINE`` remains the canonical setting.  The
+    ``PLINDER_OFFLINE_MODE`` alias is accepted for compatibility with cluster
+    launch environments that use the longer name.
+    """
+    values = (
+        os.getenv("PLINDER_OFFLINE"),
+        os.getenv("PLINDER_OFFLINE_MODE"),
+    )
+    return any(
+        value is not None
+        and value.strip().lower() not in {"", "0", "false", "no", "off"}
+        for value in values
+    )
+
+
 def thread_pool(func: Callable[[T], None], items: Iterable[T]) -> None:
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(func, items))
@@ -21,7 +39,7 @@ def thread_pool(func: Callable[[T], None], items: Iterable[T]) -> None:
 
 def _get_client() -> ReleaseClient:
     cfg = get_config().data
-    if (cfg.plinder_bucket, cfg.plinder_release, cfg.plinder_iteration) != (
+    if (cfg.plinder_bucket, cfg.plinder_release, cfg.plinder_release_number) != (
         "plinder",
         "2024-06",
         "v2",
@@ -71,16 +89,48 @@ def _download(client: ReleaseClient, paths: list[Path], force_progress: bool) ->
 
 
 def download_paths(*, paths: list[Path], force_progress: bool = False) -> None:
-    if paths and not os.getenv("PLINDER_OFFLINE"):
+    """
+    Download pre-determined paths from the release mirror concurrently. This
+    is useful when we want to process a pre-determined subset of the data
+    rather than all of the contents of the dataset.
+
+    Parameters
+    ----------
+    paths : list[Path]
+        the local paths to download, resolved against the release cache root
+    force_progress : bool, default=False
+        if True, always display a progress bar
+    """
+    if paths and not is_offline():
         _download(_get_client(), paths, force_progress)
 
 
 def get_plinder_path(
     *, rel: str = "", download: bool = True, force_progress: bool = False
 ) -> Path:
+    """
+    Get the local cache path for a file or directory in the plinder release,
+    downloading it first if requested. This provides a convenient way to
+    manage local file caching since it is automatically synced from the
+    release mirror on access in case remote files change.
+
+    Parameters
+    ----------
+    rel : str
+        Relative path to the file or directory.
+    download : bool, default=True
+        if True, download the files
+    force_progress : bool, default=False
+        if True, force progress bar even if < 10 files
+
+    Returns
+    -------
+    Path
+        The local cache path.
+    """
     root = Path(get_config().data.plinder_dir)
     local = root / checked_key(rel)
-    if os.getenv("PLINDER_OFFLINE") or not download:
+    if is_offline() or not download:
         return local
     client = _get_client()
     remote = client.path(rel)
@@ -91,17 +141,3 @@ def get_plinder_path(
     )
     _download(client, [root / client.key(p) for p in files], force_progress)
     return local
-
-
-def list_zip_paths(rel: str) -> list[Path]:
-    root = Path(get_config().data.plinder_dir)
-    rel = checked_key(rel)
-    if os.getenv("PLINDER_OFFLINE"):
-        return sorted((root / rel).glob("*.zip"))
-    client = _get_client()
-    return [root / client.key(p) for p in client.path(rel).glob("*.zip")]
-
-
-def get_plinder_paths(*, paths: list[Path]) -> list[Path]:
-    download_paths(paths=paths)
-    return paths

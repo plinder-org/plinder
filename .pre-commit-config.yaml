@@ -4,7 +4,6 @@ exclude: |
     (?x)^(
         docs/.*png|
         tests/test_data/.*|
-        src/plinder/data/utils/annotations/static_files/dates.csv|
         private/.*ipynb
     )$
 repos:
@@ -15,15 +14,12 @@ repos:
     - id: end-of-file-fixer
     - id: check-yaml
     - id: check-added-large-files
--   repo: local
+# pinned ruff, so the hook does not depend on whichever ruff is first on PATH
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
     hooks:
-      - id: ruff-format
-        name: ruff-format
-        entry: bash -c 'ruff format --force-exclude --preview src tests'
-        language: system
-        types: [python]
-      - id: ruff-linter
-        name: ruff-linter
-        entry: bash -c 'ruff check --fix src tests'
-        language: system
-        types: [python]
+    - id: ruff-format
+      files: ^(src|tests)/
+    - id: ruff
+      args: [--fix]
+      files: ^(src|tests)/

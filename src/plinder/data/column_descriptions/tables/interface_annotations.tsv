@@ -1,0 +1,23 @@
+Name	Type	Description
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+system_id	string	ID of the system
+system_biounit_id	string	Biounit ID
+interface_chain_1	string	First canonical assembly-chain instance
+interface_chain_2	string	Second canonical assembly-chain instance
+interface_chain_1_residue_numbers	list<element: int32>	Source-mmCIF residue numbers at the interface on chain 1
+interface_chain_1_residue_indices	list<element: int32>	Zero-based resolved-chain indices corresponding positionally to chain 1 residue numbers
+interface_chain_2_residue_numbers	list<element: int32>	Source-mmCIF residue numbers at the interface on chain 2
+interface_chain_2_residue_indices	list<element: int32>	Zero-based resolved-chain indices corresponding positionally to chain 2 residue numbers
+interface_num_contact_residue_pairs	int64	Number of residue pairs in contact across the protein interface
+interface_contact_area	double	Voronota-LT contact area in square angstroms between the two chains in the full biological assembly; null when the assembly tessellation was skipped or failed
+prodigy_is_annotated	bool	Whether PRODIGY-cryst features and a biological/crystal label are available
+prodigy_label	string	PRODIGY-cryst BIO or XTAL interface label
+prodigy_probability_bio	float	PRODIGY-cryst probability that the interface is biological
+prodigy_link_density	float	PRODIGY-cryst interface link-density feature
+prodigy_intermolecular_contacts	double	PRODIGY-cryst count of intermolecular atomic contacts
+prodigy_charged_charged_contacts	double	PRODIGY-cryst count of charged-charged contacts
+prodigy_charged_polar_contacts	double	PRODIGY-cryst count of charged-polar contacts
+prodigy_charged_apolar_contacts	double	PRODIGY-cryst count of charged-apolar contacts
+prodigy_polar_polar_contacts	double	PRODIGY-cryst count of polar-polar contacts
+prodigy_apolar_polar_contacts	double	PRODIGY-cryst count of apolar-polar contacts
+prodigy_apolar_apolar_contacts	double	PRODIGY-cryst count of apolar-apolar contacts

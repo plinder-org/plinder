@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Iterable, cast
 
 import biotite.structure as struc
 import numpy as np
@@ -12,25 +12,23 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, model_validator
 from rdkit import Chem
 
-from plinder.core.structure import surgery
 from plinder.core.structure.atoms import (
     _stack_atom_array_features,
     atom_array_from_cif_file,
     get_residue_index_mapping_mask,
     make_atom_mask,
+    resn2seq,
+    write_cif,
+)
+from plinder.core.structure.ccd_template import (
+    UNRESOLVED_ANNOTATION,
+    add_missing_atoms,
 )
 from plinder.core.structure.smallmols_utils import (
     generate_input_conformer,
     match_ligands,
 )
 from plinder.core.structure.superimpose import superimpose_chain
-from plinder.core.structure.vendored import (
-    get_per_chain_seq_alignments,
-    get_seq_aligned_structures,
-    invert_chain_seq_map,
-    resn2seq,
-    write_pdb,
-)
 from plinder.core.utils import constants as pc
 from plinder.core.utils.dataclass import stringify_dataclass
 from plinder.core.utils.log import setup_logger
@@ -80,17 +78,6 @@ def _superimpose_common_atoms(
         )
 
 
-def reverse_dict(mapping: dict[int, int]) -> dict[int, int]:
-    return {v: k for k, v in mapping.items()}
-
-
-def get_rdkit_mol(ligand: Path | str) -> Chem.rdchem.Mol:
-    if isinstance(ligand, Path):
-        return Chem.MolFromSmiles(ligand)
-    elif isinstance(ligand, Path):
-        return next(Chem.SDMolSupplier(ligand))
-
-
 class Structure(BaseModel):
     id: str
     protein_path: Path
@@ -107,7 +94,7 @@ class Structure(BaseModel):
                 # tuple[NDArray, NDArray],
                 Chem.Mol,
                 # tuple[NDArray, NDArray],
-                tuple[NDArray, NDArray],
+                tuple[NDArray[np.int_], NDArray[np.int_]],
             ],
         ]
         | None
@@ -115,6 +102,7 @@ class Structure(BaseModel):
     add_ligand_hydrogens: bool = False
     skip_3d_confgen: bool = False
     structure_type: str = "holo"
+    complete_missing_atoms: bool = False
 
     """Initialize structure.
     This dataclass provides abstraction over plinder systems holo, apo and predicted structures.
@@ -137,23 +125,21 @@ class Structure(BaseModel):
         Dictionary of ligand smiles with chain id as key and smiles as value
     protein_atom_array : AtomArray | None = None
         Protein Biotite atom array
-    ligand_mols : ligand_mols: Optional[
-        dict[
-            str,
-            tuple[Chem.Mol, Chem.Mol, Chem.Mol, tuple[NDArray, NDArray]]
-        ]
-    ]
-        Dictionary of ligand molecule id to
-            molecule loaded from smiles (2D),
-            template (random) conformer generated from 2D,
-            resolved (holo) mol conformer,
-            paired stacked arrays (template vs holo) mapping atom order by index
+    ligand_mols : dict, optional
+        Ligand molecules keyed by ligand ID. Each value contains the molecule
+        loaded from SMILES, a generated template conformer, the resolved
+        conformer, and paired atom-index arrays for the template and resolved
+        structures.
     add_ligand_hydrogens : bool = False
         Whether to add hydrogen to ligand or not
     skip_3d_confgen : bool = False
         Use 2D coords instead of (default) 3D conformer generation
     structure_type : str = "holo"
         Structure type, "holo", "apo" or "pred"
+    complete_missing_atoms : bool = False
+        Append CCD-template heavy atoms missing from receptor residues with NaN
+        coordinates and an ``is_unresolved`` annotation (see
+        :func:`plinder.core.structure.ccd_template.add_missing_atoms`)
     """
 
     class Config:
@@ -163,6 +149,8 @@ class Structure(BaseModel):
     def initialize(self) -> Structure:
         if self.protein_atom_array is None:
             self.load_protein()
+        if self.complete_missing_atoms and self.protein_atom_array is not None:
+            self.protein_atom_array = add_missing_atoms(self.protein_atom_array)
         if self.protein_sequence is None:
             self.load_sequence()
         if self.ligand_sdfs is not None or self.ligand_smiles is not None:
@@ -270,12 +258,12 @@ class Structure(BaseModel):
             return None
 
     def save_to_disk(self, filepath: Path | None = None) -> None:
-        """Write Structure Atomarray to a PDB file.
+        """Write the structure AtomArray to an mmCIF file.
 
         Parameters
         ----------
         filepath : Path | None
-            Filepath to output PDB.
+            Filepath to output mmCIF.
             If not provided, will write to self.protein_path,
             potentially overwriting if the file already exists!
 
@@ -286,7 +274,7 @@ class Structure(BaseModel):
         """
         if not filepath:
             filepath = self.protein_path
-        write_pdb(self.protein_atom_array, filepath)
+        write_cif(self.protein_atom_array, filepath)
 
     def filter(
         self,
@@ -317,88 +305,6 @@ class Structure(BaseModel):
         assert self.protein_atom_array is not None
         self.protein_atom_array = self.protein_atom_array[atom_mask]
         return None
-
-    def get_per_chain_seq_alignments(
-        self,
-        other: Structure,
-    ) -> dict[str, dict[int, int]]:
-        self2other_seq: dict[str, dict[int, int]] = get_per_chain_seq_alignments(
-            other.protein_atom_array, self.protein_atom_array
-        )
-        return self2other_seq
-
-    def align_common_sequence(
-        self,
-        other: Structure,
-        copy: bool = True,
-        remove_differing_atoms: bool = True,
-        renumber_residues: bool = False,
-        remove_differing_annotations: bool = False,
-    ) -> tuple[Structure, Structure]:
-        assert (other.protein_atom_array is not None) and (
-            self.protein_atom_array is not None
-        )
-        ref_at = other.protein_atom_array.copy()
-        target_at = self.protein_atom_array.copy()
-        target2ref_seq = get_per_chain_seq_alignments(ref_at, target_at)
-        ref2target_seq = invert_chain_seq_map(target2ref_seq)
-        ref_at, target_at = get_seq_aligned_structures(ref_at, target_at)
-
-        if remove_differing_atoms:
-            # Even if atom counts are identical, annotation categories must be the same
-            # First modify annotation arrays to use struc.filter_intersection,
-            # then filter original structure with annotations to match res_id, res_name, atom_name
-            # of intersecting structure
-            ref_at_mod = ref_at.copy()
-            target_at_mod = target_at.copy()
-            ref_at_mod, target_at_mod = surgery.fix_annotation_mismatch(
-                ref_at_mod, target_at_mod, ["element", "ins_code", "b_factor"]
-            )
-            ref_target_mask = struc.filter_intersection(ref_at_mod, target_at_mod)
-            target_ref_mask = struc.filter_intersection(target_at_mod, ref_at_mod)
-            if remove_differing_annotations:
-                ref_at = ref_at_mod[ref_target_mask].copy()
-                target_at = target_at_mod[target_ref_mask].copy()
-            else:
-                ref_at = ref_at[ref_target_mask].copy()
-                target_at = target_at[target_ref_mask].copy()
-
-        if not renumber_residues:
-            target_at.res_id = np.array(
-                [ref2target_seq[at.chain_id][at.res_id] for at in target_at]
-            )
-
-        if copy:
-            self_struct = Structure(
-                id=self.id,
-                protein_path=self.protein_path,
-                protein_sequence=self.protein_sequence,
-                ligand_sdfs=self.ligand_sdfs,
-                ligand_smiles=self.ligand_smiles,
-                protein_atom_array=target_at,
-                ligand_mols=self.ligand_mols,
-                add_ligand_hydrogens=self.add_ligand_hydrogens,
-                skip_3d_confgen=self.skip_3d_confgen,
-                structure_type=self.structure_type,
-            )
-
-            other_struct = Structure(
-                id=other.id,
-                protein_path=other.protein_path,
-                protein_sequence=self.protein_sequence,
-                ligand_sdfs=other.ligand_sdfs,
-                ligand_smiles=other.ligand_smiles,
-                protein_atom_array=ref_at,
-                ligand_mols=other.ligand_mols,
-                add_ligand_hydrogens=other.add_ligand_hydrogens,
-                skip_3d_confgen=other.skip_3d_confgen,
-                structure_type=other.structure_type,
-            )
-
-            return self_struct, other_struct
-        other.protein_atom_array = ref_at
-        self.protein_atom_array = target_at
-        return self, other
 
     def set_chain(self, chain_id: str) -> None:
         if self.protein_atom_array is not None:
@@ -454,7 +360,7 @@ class Structure(BaseModel):
         )
 
     @property
-    def input_sequence_residue_mask_stacked(self) -> list[list[int]]:
+    def input_sequence_residue_mask_stacked(self) -> list[NDArray[np.float64]]:
         """Input sequence stacked by chain"""
         # TODO: do we want to keep this as assertion?
         # better if then raise?
@@ -517,7 +423,7 @@ class Structure(BaseModel):
             make_atom_mask(
                 self.protein_atom_array[self.protein_atom_array.chain_id == ch],
                 self.protein_sequence[ch],
-                seqres_masks[ch],
+                seqres_masks[ch].tolist(),
             )
             for ch in self.protein_chain_ordered
         ]
@@ -531,12 +437,12 @@ class Structure(BaseModel):
             return []
 
     @property
-    def protein_coords(self) -> list[NDArray]:
+    def protein_coords(self) -> list[NDArray[np.float32]]:
         """list[NDArray]: The coordinates of the protein atoms in the structure."""
         assert self.protein_atom_array is not None
 
-        protein_coords: list[NDArray] = [
-            coord
+        protein_coords = [
+            cast(NDArray[np.float32], coord)
             for coord in _stack_atom_array_features(
                 self.protein_atom_array, "coord", self.protein_chain_ordered
             )
@@ -571,11 +477,23 @@ class Structure(BaseModel):
         return {tag: mol_tuple[0] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-    def protein_calpha_coords(self) -> NDArray[np.double]:
+    def protein_unresolved_atom_mask(self) -> list[NDArray[np.int_]]:
+        """Per chain, 1 for CCD-template atoms with NaN coordinates, 0 for deposited atoms."""
         assert self.protein_atom_array is not None
-        """list[NDArray]: The coordinates of the protein clapha atoms in the structure."""
-        protein_calpha_coords: list[NDArray] = [
-            coord
+        atoms = self.protein_atom_array
+        mask = (
+            atoms.get_annotation(UNRESOLVED_ANNOTATION).astype(np.int64)
+            if UNRESOLVED_ANNOTATION in atoms.get_annotation_categories()
+            else np.zeros(atoms.array_length(), dtype=np.int64)
+        )
+        return [mask[atoms.chain_id == chain] for chain in self.protein_chain_ordered]
+
+    @property
+    def protein_calpha_coords(self) -> list[NDArray[np.float32]]:
+        """list[NDArray]: Per-chain coordinates of the protein C-alpha atoms."""
+        assert self.protein_atom_array is not None
+        protein_calpha_coords = [
+            cast(NDArray[np.float32], coord)
             for coord in _stack_atom_array_features(
                 self.protein_atom_array[self.protein_atom_array.atom_name == "CA"],
                 "coord",
@@ -610,7 +528,7 @@ class Structure(BaseModel):
     @property
     def ligand_template2resolved_atom_order_stacks(
         self,
-    ) -> dict[str, tuple[NDArray, NDArray]]:
+    ) -> dict[str, tuple[NDArray[np.int_], NDArray[np.int_]]]:
         """for every ligand this gets a pair of atom order array stacks providing index sort to match template atoms to holo conformer atoms"""
         return (
             {tag: mol_tuple[3] for tag, mol_tuple in self.ligand_mols.items()}
@@ -631,14 +549,14 @@ class Structure(BaseModel):
 
     @property
     def protein_backbone_mask(self) -> NDArray[np.bool_]:
-        """ndarray[np.bool\_]: a logical mask for backbone atoms."""
+        r"""ndarray[np.bool\_]: a logical mask for backbone atoms."""
         assert self.protein_atom_array is not None
         mask: NDArray[np.bool_] = struc.filter_peptide_backbone(self.protein_atom_array)
         return mask
 
     @property
     def protein_calpha_mask(self) -> NDArray[np.bool_]:
-        """ndarray[np.bool\_]: a logical mask for alpha carbon atoms."""
+        r"""ndarray[np.bool\_]: a logical mask for alpha carbon atoms."""
         assert self.protein_atom_array is not None
         mask: NDArray[np.bool_] = self.protein_atom_array.atom_name == "CA"
         return mask

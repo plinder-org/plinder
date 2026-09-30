@@ -22,6 +22,7 @@ services:
       - plinder
     volumes:
       - ./tests/:/app/tests/
+      - ./docs/:/app/docs/
       - ./pytest.ini:/app/pytest.ini
       - ./.coveragerc:/app/.coveragerc
       - ./reports/:/app/reports/

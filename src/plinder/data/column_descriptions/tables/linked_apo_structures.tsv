@@ -1,0 +1,19 @@
+Name	Type	Description
+reference_system_id	string	Holo PLINDER system linked to this apo chain
+linked_structure_id	string	Stable identifier for the linked apo chain
+source_entry_id	string	PDB entry containing the linked apo chain
+source_chain_asym_id	string	Source asymmetric-chain ID of the linked apo chain
+source_chain_auth_id	string	Author chain ID of the linked apo chain
+source_biounit_id	string	Source biological assembly containing the apo chain
+source_chain_instance	string	Exact biological-assembly chain instance that was scored
+source_num_contacting_ions	int16	Number of ion chains contacting the apo chain
+source_num_contacting_artifacts	int16	Number of crystallization-artifact chains contacting the apo chain
+source_num_contacting_other_ligands	int16	Number of other ligand chains contacting the apo chain
+source_resolution	float	Experimental resolution of the apo source entry
+rank	int16	Apo candidate rank within the reference holo system
+num_ligand_pockets	int16	Number of holo ligand pockets matched by this apo chain
+min_pocket_fident	int8	Minimum pocket sequence identity across matched ligands
+mean_pocket_fident	float	Mean pocket sequence identity across matched ligands
+min_protein_fident_weighted_sum	int8	Minimum chain-length-weighted protein sequence identity across matched ligands
+min_protein_fident_qcov_weighted_sum	int8	Minimum chain-length-weighted protein identity times query coverage across matched ligands
+min_protein_lddt_weighted_sum	int8	Minimum chain-length-weighted protein LDDT across matched ligands

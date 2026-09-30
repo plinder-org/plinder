@@ -37,7 +37,7 @@ debugpy==1.8.5            # via ipykernel
 decorator==5.1.1          # via gcsfs, ipython
 defusedxml==0.7.1         # via nbconvert
 distlib==0.3.8            # via virtualenv
-duckdb==1.0.0             # via plinder (pyproject.toml)
+duckdb==1.5.2             # via plinder (pyproject.toml)
 eval-type-backport==0.2.0  # via plinder (pyproject.toml)
 exceptiongroup==1.2.2     # via anyio, ipython, pytest
 execnet==2.1.1            # via pytest-xdist

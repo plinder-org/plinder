@@ -1,0 +1,8 @@
+sequences:
+- protein:
+    id: [A]
+    sequence: APVRSLNCTLRDSQQKSLVMSGPYELKALHLQGQDMEQQVVFSMSFVQGEESNDKIPVALGLKEKNLYLSCVLKDDKPTLQLESVDPKNYPKKKMEKRFVFNKIEINNKLEFESAQFPNWYISTSQAENMPVFLGGTKGGQDITDFTMQFVSS
+    msa: ../inputs/msa_files/8c3u__1__1.a__1.c/1.A.csv
+- ligand:
+    id: [B]
+    smiles: Cc1ccc2c(c1)NC(=O)[C@@]2(c1cn[nH]c1)c1cc(-c2ccc(C(=O)O)cc2C(=O)O)ccc1O

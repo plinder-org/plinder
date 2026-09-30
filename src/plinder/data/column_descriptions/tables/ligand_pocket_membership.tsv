@@ -1,0 +1,5 @@
+Name	Type	Description
+system_id	string	ID of the system
+ligand_id	string	Unique identifier for a given ligand.
+representative_system_id	string	System ID selected as the representative for a ligand pocket or protein interface
+representative_ligand_id	string	Ligand ID selected as the representative for a ligand-pocket group

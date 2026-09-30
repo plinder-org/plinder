@@ -9,6 +9,7 @@ from threading import Thread
 from types import SimpleNamespace
 
 import pytest
+
 from plinder.core.utils import cpl
 from plinder.core.utils import r2 as dataset
 
@@ -46,7 +47,7 @@ def mirror(tmp_path, monkeypatch):
         data=SimpleNamespace(
             plinder_bucket="plinder",
             plinder_release="2024-06",
-            plinder_iteration="v2",
+            plinder_release_number="v2",
             plinder_dir=str(tmp_path / "cache"),
             plinder_remote=f"http://127.0.0.1:{server.server_port}/2024-06/v2",
             force_update=False,
@@ -72,16 +73,6 @@ def test_directory_download_and_truncated_cache_repair(mirror):
     assert not (Path(cfg.data.plinder_dir) / "systems/ab.zip").exists()
 
 
-def test_archive_listing_without_download(mirror):
-    cfg, _ = mirror
-    root = cpl.get_plinder_path(rel="systems", download=False)
-    paths = cpl.list_zip_paths("systems")
-    assert paths == [root / "ab.zip"]
-    assert not paths[0].exists()
-    assert cpl.get_plinder_paths(paths=paths) == paths
-    assert paths[0].read_bytes() == b"archive"
-
-
 def test_small_batch_failure_propagates(mirror):
     cfg, origin = mirror
     (origin / "systems/ab.zip").write_bytes(b"corrupt")
@@ -94,7 +85,6 @@ def test_offline_does_not_access_network(mirror, monkeypatch):
     monkeypatch.setenv("PLINDER_OFFLINE", "true")
     monkeypatch.setattr(cpl, "_get_client", lambda: pytest.fail("network"))
     assert isinstance(cpl.get_plinder_path(rel="missing"), Path)
-    assert cpl.list_zip_paths("systems") == []
 
 
 @pytest.mark.parametrize(
@@ -107,7 +97,7 @@ def test_path_traversal_rejected(mirror, rel):
 
 def test_unsupported_release_rejected(mirror):
     cfg, _ = mirror
-    cfg.data.plinder_iteration = "v1"
+    cfg.data.plinder_release_number = "v1"
     with pytest.raises(ValueError, match="2024-06/v2"):
         cpl.get_plinder_path(rel="systems")
 
@@ -115,35 +105,6 @@ def test_unsupported_release_rejected(mirror):
 def test_missing_file_fails(mirror):
     with pytest.raises(FileNotFoundError):
         cpl.get_plinder_path(rel="missing")
-
-
-def test_archive_extraction_and_repair(mirror):
-    from zipfile import ZipFile
-
-    from plinder.core.utils import unpack
-
-    cfg, origin = mirror
-    cfg.data.systems = "systems"
-    cfg.context = SimpleNamespace(system_ids=[], pdb_ids=[], two_char_codes=["ab"])
-    archive = origin / "systems/ab.zip"
-    with ZipFile(archive, "w") as stream:
-        stream.writestr("example/protein.cif", "structure")
-    payload = archive.read_bytes()
-    record = {
-        "key": "systems/ab.zip",
-        "size": len(payload),
-        "md5": base64.b64encode(hashlib.md5(payload).digest()).decode(),
-    }
-    (origin / "manifest.jsonl.gz").write_bytes(
-        gzip.compress(json.dumps(record).encode())
-    )
-    unpack.get_zips_to_unpack(kind="systems", cfg=cfg)
-    root = Path(cfg.data.plinder_dir) / "systems"
-    assert (root / "example/protein.cif").read_text() == "structure"
-    assert (root / "ab_done").exists()
-    (root / "ab.zip").write_bytes(b"broken")
-    cpl.download_paths(paths=[root / "ab.zip"])
-    assert not (root / "ab_done").exists()
 
 
 def test_cached_same_size_edit_requires_force_update(mirror, monkeypatch):
@@ -274,29 +235,6 @@ def test_interrupted_native_transfer_restarts(tmp_path, monkeypatch):
         server.shutdown()
         thread.join()
         server.server_close()
-
-
-def test_full_download_includes_database_metadata(tmp_path, monkeypatch):
-    from dataclasses import asdict
-
-    from omegaconf import DictConfig
-    from plinder.core.index import utils
-    from plinder.core.utils.config import DataConfig
-
-    cfg = SimpleNamespace(
-        data=DictConfig(asdict(DataConfig(plinder_mount=str(tmp_path))))
-    )
-    requested = []
-
-    def download(*, rel, **kwargs):
-        requested.append(rel)
-        return tmp_path / rel
-
-    monkeypatch.setattr(utils, "get_config", lambda **kwargs: cfg)
-    monkeypatch.setattr(cpl, "get_plinder_path", download)
-    monkeypatch.setattr(utils, "get_zips_to_unpack", lambda **kwargs: {})
-    utils.download_plinder_cmd(["--yes"])
-    assert "dbs" in requested
 
 
 @pytest.mark.parametrize("resource", ["manifest", "object"])

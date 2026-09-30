@@ -1,0 +1,4 @@
+Name	Type	Description
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+source_mmcif_major_revision	int64	Major revision number of the source PDB mmCIF used during ingest
+source_mmcif_minor_revision	int64	Minor revision number of the source PDB mmCIF used during ingest
