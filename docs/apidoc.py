@@ -61,6 +61,8 @@ def _discover_modules(
         if source_path.name == "__init__.py":
             continue
         suffix = relative_path.with_suffix("").parts
+        if any(part.startswith("_") for part in suffix):
+            continue
         module_name = ".".join((package_name, *suffix))
         if not _is_excluded(module_name, excluded_modules):
             modules.append((module_name, source_path))

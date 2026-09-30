@@ -16,7 +16,7 @@ from proc import Proc
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger("doc")
-DEPENDENCY_BLOCKS = "test,eval,plots"
+DEPENDENCY_BLOCKS = "data,test,eval,plots"
 
 
 def get_dev_tag() -> str:
