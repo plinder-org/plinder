@@ -187,6 +187,7 @@ def test_scoring_regression(scoring_fixture, tmp_path):
         "sucos_shape",
         "sucos_shape_pocket_qcov",
     }.issubset(set(df["metric"]))
+    assert "pli_unique_qcov" not in set(df["metric"])
 
     if os.environ.get("PLINDER_REGEN_SCORING") or not GOLDEN_PATH.exists():
         GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)

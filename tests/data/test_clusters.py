@@ -1568,7 +1568,11 @@ def test_finalize_index_rejects_clusters_from_before_targeted_repair(tmp_path):
 
 
 def test_default_cluster_metrics_use_only_pocket_weighted_shape():
-    from plinder.core.scores.metrics import LIGAND_SCORE_NAMES, is_ligand_level_metric
+    from plinder.core.scores.metrics import (
+        LIGAND_CLUSTER_METRICS,
+        LIGAND_SCORE_NAMES,
+        is_ligand_level_metric,
+    )
     from plinder.data.pipeline.config import METRICS
 
     assert "shape" in LIGAND_SCORE_NAMES
@@ -1579,6 +1583,13 @@ def test_default_cluster_metrics_use_only_pocket_weighted_shape():
     assert "color" not in METRICS
     assert "pocket_fident" not in METRICS
     assert "pocket_fident_qcov" not in METRICS
+    assert "pli_unique_qcov" not in LIGAND_SCORE_NAMES
+    assert "pli_unique_qcov" not in METRICS
+    assert set(LIGAND_CLUSTER_METRICS) == {
+        "pocket_qcov",
+        "pli_qcov",
+        "sucos_shape_pocket_qcov",
+    }
     assert "shape_tanimoto" not in METRICS
     assert "sucos_shape" not in METRICS
     assert not any(metric.startswith("protein_lddt") for metric in METRICS)

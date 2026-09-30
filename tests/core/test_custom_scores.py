@@ -186,10 +186,11 @@ def test_custom_search_replaces_shadowed_base_hits_with_overlay(tmp_path, monkey
     def fake_alignment(**kwargs):
         calls.append(kwargs["alignment_config"].max_seqs)
 
-    def fake_mapping(*, raw_alignment, output_path, **_kwargs):
+    def fake_mapping(*, raw_alignment, output_path, exclude_target_entries, **_kwargs):
         entries = (
             ["1abc"] if raw_alignment.stem.endswith("overlay") else ["1abc", "2def"]
         )
+        entries = [entry for entry in entries if entry not in exclude_target_entries]
         pd.DataFrame({"target_entry": entries}).to_parquet(output_path, index=False)
 
     monkeypatch.setattr(get_similarity_scores, "run_alignment", fake_alignment)
@@ -718,15 +719,18 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
     raw = tmp_path / "raw.parquet"
     pd.DataFrame(
         {
-            "query": ["cq00000000_A"],
-            "target": ["pdb_00001abc_xyz-enrich.cif.gz_X"],
-            "qstart": [1],
-            "tstart": [2],
-            "qcov": [0.8],
-            "fident": [0.5],
-            "qaln": ["AC"],
-            "taln": ["AC"],
-            "lddt": [0.7],
+            "query": ["cq00000000_A", "cq00000000_A"],
+            "target": [
+                "pdb_00001abc_xyz-enrich.cif.gz_X",
+                "pdb_00002def_xyz-enrich.cif.gz_OLD",
+            ],
+            "qstart": [1, 1],
+            "tstart": [2, 2],
+            "qcov": [0.8, 0.8],
+            "fident": [0.5, 0.5],
+            "qaln": ["AC", "AC"],
+            "taln": ["AC", "AC"],
+            "lddt": [0.7, 0.7],
         }
     ).to_parquet(raw, index=False)
     lookup = tmp_path / "alignment_chain_lookup.parquet"
@@ -747,9 +751,11 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
         query_databases=databases,
         alignment_chain_lookup=lookup,
         output_path=output,
+        exclude_target_entries={"2def"},
     )
     result = pd.read_parquet(output)
 
+    assert len(result) == 1
     assert result.loc[0, "query_chain_id"] == "model__A"
     assert result.loc[0, "target_entry"] == "1abc"
     assert result.loc[0, "target_chain_asym_id"] == "B"

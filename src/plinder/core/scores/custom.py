@@ -1360,11 +1360,19 @@ def map_custom_alignment_hits(
     query_databases: CustomQueryDatabases,
     alignment_chain_lookup: Path,
     output_path: Path,
+    exclude_target_entries: Iterable[str] = (),
 ) -> Path:
     """Replace backend identifiers with custom and PLINDER label-asym IDs."""
     if backend not in SEARCH_BACKENDS:
         raise ValueError(f"unsupported search backend: {backend}")
     raw = pd.read_parquet(raw_alignment)
+    excluded = {str(entry).lower() for entry in exclude_target_entries}
+    if excluded and not raw.empty:
+        target_entries = {
+            target: _parse_plinder_target_identifier(str(target), backend=backend)[0]
+            for target in raw["target"].unique()
+        }
+        raw = raw.loc[~raw["target"].map(target_entries).isin(excluded)].copy()
     identifier_map = pd.read_parquet(
         query_databases.identifier_map,
         filters=[("backend", "=", backend)],
@@ -2045,13 +2053,12 @@ def run_custom_protein_searches(
                 query_databases=query_databases,
                 alignment_chain_lookup=assets.alignment_chain_lookup,
                 output_path=mapped,
+                exclude_target_entries=(
+                    assets.shadowed_entries if label == "base" else ()
+                ),
             )
             if combine:
                 frame = pd.read_parquet(mapped)
-                if label == "base":
-                    frame = frame.loc[
-                        ~frame["target_entry"].astype(str).isin(assets.shadowed_entries)
-                    ]
                 frames.append(frame)
                 mapped.unlink()
         if combine:

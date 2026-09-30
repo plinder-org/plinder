@@ -23,7 +23,6 @@ LIGAND_SCORE_NAMES = (
     "pocket_fident_qcov",
     "pli_fident",
     "pli_qcov",
-    "pli_unique_qcov",
     "shape",
     "color",
     "sucos_shape",

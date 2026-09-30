@@ -282,7 +282,6 @@ _PocketDataType = tuple[
     dict[str, dict[int, Counter[str]]],
     int,
     int,
-    int,
 ]
 _PocketPatternInfoType = tuple[str, dict[str, str], bool]
 _PocketPairResultType = tuple[
@@ -3230,7 +3229,6 @@ class Scorer:
             query_interactions,
             pocket_length,
             pli_length,
-            unique_length,
         ) = self._protein_only_pocket_data(
             query_system.pdb_id,
             query_system.protein_chains_asym_id,
@@ -3245,7 +3243,6 @@ class Scorer:
                 target_interactions,
                 _,
                 _,
-                _,
             ) = self._protein_only_pocket_data(
                 target_system.pdb_id,
                 target_system.protein_chains_asym_id,
@@ -3258,7 +3255,6 @@ class Scorer:
             query_interactions=query_interactions,
             pocket_length=pocket_length,
             pli_length=pli_length,
-            pli_unique_length=unique_length,
             target_pocket=target_pocket,
             target_interactions=target_interactions,
         )
@@ -3272,7 +3268,6 @@ class Scorer:
     ) -> tuple[
         dict[str, dict[int, int]],
         dict[str, dict[int, Counter[str]]],
-        int,
         int,
         int,
     ]:
@@ -3292,17 +3287,11 @@ class Scorer:
             for residues in protein_interactions.values()
             for counter in residues.values()
         )
-        unique_interaction_length = sum(
-            len(counter)
-            for residues in protein_interactions.values()
-            for counter in residues.values()
-        )
         return (
             protein_pocket,
             protein_interactions,
             pocket_length,
             interaction_length,
-            unique_interaction_length,
         )
 
     def _get_pocket_pli_scores(
@@ -3315,7 +3304,6 @@ class Scorer:
         query_interactions: dict[str, dict[int, Counter[str]]],
         pocket_length: int,
         pli_length: int,
-        pli_unique_length: int,
         target_pocket: dict[str, dict[int, int]] | None,
         target_interactions: dict[str, dict[int, Counter[str]]] | None,
     ) -> tuple[
@@ -3365,10 +3353,6 @@ class Scorer:
                                     & t_chain_interactions[t_n]
                                 ).values()
                             )
-                            pli_scores[f"pli_unique_qcov_{source}"] += len(
-                                set(q_chain_interactions[q_n].values())
-                                & set(t_chain_interactions[t_n].values())
-                            )
         if pocket_length:
             for score in pocket_scores:
                 pocket_scores[score] /= pocket_length
@@ -3378,7 +3362,7 @@ class Scorer:
             if score.startswith("pli_fident_"):
                 denominator = pli_residue_length
             else:
-                denominator = pli_unique_length if "unique" in score else pli_length
+                denominator = pli_length
             if denominator:
                 pli_scores[score] /= denominator
             else:
@@ -3400,12 +3384,10 @@ class Scorer:
             query_interactions,
             pocket_length,
             pli_length,
-            unique_length,
         ) = self._ligand_protein_only_pocket_data(query_ligand)
         (
             target_pocket,
             target_interactions,
-            _,
             _,
             _,
         ) = self._ligand_protein_only_pocket_data(target_ligand)
@@ -3415,7 +3397,6 @@ class Scorer:
             query_interactions=query_interactions,
             pocket_length=pocket_length,
             pli_length=pli_length,
-            pli_unique_length=unique_length,
             target_pocket=target_pocket,
             target_interactions=target_interactions,
         )
@@ -3611,12 +3592,10 @@ class Scorer:
             query_interactions,
             pocket_length,
             pli_length,
-            unique_length,
         ) = self._ligand_protein_only_pocket_data(query_ligand)
         (
             target_pocket,
             target_interactions,
-            _,
             _,
             _,
         ) = self._ligand_protein_only_pocket_data(target_ligand)
@@ -3690,7 +3669,6 @@ class Scorer:
                 query_interactions=query_interactions,
                 pocket_length=pocket_length,
                 pli_length=pli_length,
-                pli_unique_length=unique_length,
                 target_pocket=target_pocket,
                 target_interactions=target_interactions,
             )
@@ -3711,7 +3689,6 @@ class Scorer:
             query_interactions,
             pocket_length,
             pli_length,
-            unique_length,
         ) = self._ligand_protein_only_pocket_data(query_ligand)
         pocket_scores, pli_scores = self._get_pocket_pli_scores(
             alns=alns,
@@ -3719,7 +3696,6 @@ class Scorer:
             query_interactions=query_interactions,
             pocket_length=pocket_length,
             pli_length=pli_length,
-            pli_unique_length=unique_length,
             target_pocket=None,
             target_interactions=None,
         )
@@ -3871,7 +3847,7 @@ class Scorer:
         """Identify equivalent pockets and their copy-specific chain names."""
         if ligand.id in self._pocket_pattern_info_cache:
             return self._pocket_pattern_info_cache[ligand.id]
-        pocket, interactions, _, _, _ = self._ligand_protein_only_pocket_data(ligand)
+        pocket, interactions, _, _ = self._ligand_protein_only_pocket_data(ligand)
         chains = sorted(
             (
                 json.dumps(
