@@ -95,10 +95,13 @@ def test_path_traversal_rejected(mirror, rel):
         cpl.get_plinder_path(rel=rel)
 
 
-def test_unsupported_release_rejected(mirror):
+@pytest.mark.parametrize(
+    "release", [("2024-06", "v2"), ("2026-09", "1"), ("2026-9", ""), ("2026-13", "")]
+)
+def test_unsupported_release_rejected(mirror, release):
     cfg, _ = mirror
-    cfg.data.plinder_release_number = "v1"
-    with pytest.raises(ValueError, match="2026-09"):
+    cfg.data.plinder_release, cfg.data.plinder_release_number = release
+    with pytest.raises(ValueError, match="YYYY-MM"):
         cpl.get_plinder_path(rel="systems")
 
 

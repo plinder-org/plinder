@@ -8,7 +8,8 @@ import json
 from pathlib import Path
 
 
-def build(inventory: Path, destination: Path) -> int:
+def build(inventory: Path, destination: Path, release: str) -> int:
+    prefix = release.strip("/") + "/"
     shards = json.loads((inventory / "manifest-files.json").read_text())
     records = {}
     for shard in shards:
@@ -20,9 +21,9 @@ def build(inventory: Path, destination: Path) -> int:
         with gzip.open(path, "rt") as stream:
             for line in stream:
                 r = json.loads(line)
-                if not r["name"].startswith("2026-09/"):
+                if not r["name"].startswith(prefix):
                     raise ValueError("Unexpected release")
-                key = r["name"][len("2026-09/") :]
+                key = r["name"][len(prefix) :]
                 if key.endswith("/"):
                     continue
                 if (
@@ -47,5 +48,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inventory", type=Path)
     parser.add_argument("destination", type=Path)
+    parser.add_argument("release", help="release stamp, e.g. 2026-09")
     args = parser.parse_args()
-    print(build(args.inventory, args.destination))
+    print(build(args.inventory, args.destination, args.release))

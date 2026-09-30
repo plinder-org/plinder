@@ -1,6 +1,7 @@
 """Public dataset access with cloudpathlib and a local immutable-release cache."""
 
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Iterable, TypeVar
@@ -39,12 +40,12 @@ def thread_pool(func: Callable[[T], None], items: Iterable[T]) -> None:
 
 def _get_client() -> ReleaseClient:
     cfg = get_config().data
-    if (cfg.plinder_bucket, cfg.plinder_release, cfg.plinder_release_number) != (
-        "plinder",
-        "2026-09",
-        "",
+    if (
+        cfg.plinder_bucket != "plinder"
+        or cfg.plinder_release_number
+        or not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", cfg.plinder_release)
     ):
-        raise ValueError("R2 downloads support only plinder/2026-09")
+        raise ValueError("R2 downloads support only plinder/YYYY-MM releases")
     remote = str(cfg.plinder_remote).rstrip("/")
     url = urlsplit(remote)
     if (
