@@ -13,7 +13,7 @@ from bisect import bisect_left
 from collections import Counter
 from collections.abc import Iterable as IterableABC
 from collections.abc import Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from gzip import open as gzip_open
 from pathlib import Path
 from threading import Lock
@@ -62,6 +62,10 @@ class CustomScoringAssets:
     alignment_chain_lookup: Path
     search_databases: Mapping[str, SearchDatabaseBundle]
     ligand_archives: Mapping[str, Path]
+    overlay_search_databases: Mapping[str, SearchDatabaseBundle] = field(
+        default_factory=dict
+    )
+    shadowed_entries: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -86,21 +90,47 @@ class CustomQueryDatabases:
 
 @dataclass(frozen=True)
 class CustomProteinSearchConfig:
-    """Shared filters for custom queries against the PLINDER protein DBs."""
+    """Custom search filters, with optional E-value overrides per backend.
+
+    ``evalue`` sets all backends to the same threshold (default 0.01).
+    ``foldseek_evalue``, ``mmseqs_evalue`` and ``steam_evalue`` take precedence
+    for their respective backends when supplied.
+    """
 
     evalue: float = 0.01
+    foldseek_evalue: float | None = None
+    mmseqs_evalue: float | None = None
+    steam_evalue: float | None = None
     sensitivity: float = 11.0
     max_seqs: int = 10_000
     coverage: float = 0.0
     min_seq_id: float = 0.0
 
     def __post_init__(self) -> None:
+        for value in (
+            self.evalue,
+            self.foldseek_evalue,
+            self.mmseqs_evalue,
+            self.steam_evalue,
+        ):
+            if value is not None and not value >= 0:
+                raise ValueError("E-values must be nonnegative")
         if self.max_seqs < 1:
             raise ValueError("max_seqs must be positive")
         if not 0 <= self.coverage <= 1:
             raise ValueError("coverage must be in [0, 1]")
         if not 0 <= self.min_seq_id <= 1:
             raise ValueError("min_seq_id must be in [0, 1]")
+
+    def evalue_for(self, backend: str) -> float:
+        """Use the backend override, or the shared E-value (default 0.01)."""
+        overrides = {
+            "foldseek": self.foldseek_evalue,
+            "mmseqs": self.mmseqs_evalue,
+            "steam": self.steam_evalue,
+        }
+        value = overrides[backend]
+        return self.evalue if value is None else value
 
 
 @dataclass(frozen=True)
@@ -217,6 +247,10 @@ def resolve_search_database(
         )
     else:
         root = _local_search_database_root(Path(data_dir), backend)
+    return _validate_search_database(backend, Path(root))
+
+
+def _validate_search_database(backend: str, root: Path) -> SearchDatabaseBundle:
     root = Path(root)
     manifest_path = _require_file(
         root / "exact_cluster.json",
@@ -342,6 +376,34 @@ def resolve_custom_scoring_assets(
         backend: resolve_search_database(backend, data_dir=data_dir)
         for backend in selected_backends
     }
+    release = PlinderRelease(data_dir)
+    try:
+        manifest_path = release.fetch("search_databases_manifest")
+    except FileNotFoundError:
+        manifest = {}
+    else:
+        manifest = json.loads(manifest_path.read_text())
+        if not isinstance(manifest, dict):
+            raise ValueError(f"invalid search database manifest: {manifest_path}")
+    overlays = manifest.get("overlays", {})
+    if not isinstance(overlays, dict):
+        raise ValueError("invalid search database overlay list")
+    overlay_databases = {
+        backend: _validate_search_database(
+            backend,
+            release.fetch("search_database_overlay", backend=backend),
+        )
+        for backend in selected_backends
+        if backend in overlays
+    }
+    shadowed_entries: frozenset[str] = frozenset()
+    if manifest.get("shadowed_entries"):
+        shadowed_path = release.fetch("search_database_shadowed_entries")
+        shadowed_entries = frozenset(
+            pd.read_parquet(shadowed_path, columns=["pdb_id"])["pdb_id"].astype(str)
+        )
+    if overlay_databases and not shadowed_entries:
+        raise ValueError("search database overlay is missing its shadowed entry list")
     ligand_archives = resolve_ligand_archives(
         ligand_pdb_ids,
         data_dir=data_dir,
@@ -353,6 +415,8 @@ def resolve_custom_scoring_assets(
         alignment_chain_lookup=resolved_index["alignment_chain_lookup"],
         search_databases=databases,
         ligand_archives=ligand_archives,
+        overlay_search_databases=overlay_databases,
+        shadowed_entries=shadowed_entries,
     )
 
 
@@ -1921,7 +1985,7 @@ def run_custom_protein_searches(
         alignment_config: FoldseekConfig | MMSeqsConfig
         if backend == "foldseek":
             alignment_config = FoldseekConfig(
-                evalue=config.evalue,
+                evalue=config.evalue_for(backend),
                 sensitivity=config.sensitivity,
                 max_seqs=config.max_seqs,
                 coverage=config.coverage,
@@ -1929,34 +1993,69 @@ def run_custom_protein_searches(
             )
         else:
             alignment_config = MMSeqsConfig(
-                evalue=config.evalue,
+                evalue=config.evalue_for(backend),
                 sensitivity=config.sensitivity,
                 max_seqs=config.max_seqs,
                 coverage=config.coverage,
                 min_seq_id=config.min_seq_id,
             )
-        raw_prefix = raw_root / backend
-        run_alignment(
-            aln_type=backend,
-            query_db=query_databases.databases[backend],
-            target_db=bundle.conversion_target,
-            search_target_db=bundle.search_target,
-            cluster_alignment_db=bundle.cluster_alignments,
-            search_db=backend_scratch / "result",
-            aln_file=raw_prefix,
-            alignment_config=alignment_config,
-            tmp_dir=backend_scratch / "tmp",
-            remove_tmp=True,
-            threads=threads,
-        )
         output = output_dir / f"{backend}.parquet"
-        map_custom_alignment_hits(
-            raw_alignment=raw_prefix.with_suffix(".parquet"),
-            backend=backend,
-            query_databases=query_databases,
-            alignment_chain_lookup=assets.alignment_chain_lookup,
-            output_path=output,
-        )
+        target_bundles = [("base", bundle)]
+        if backend in assets.overlay_search_databases:
+            target_bundles.append(("overlay", assets.overlay_search_databases[backend]))
+        combine = len(target_bundles) > 1 or bool(assets.shadowed_entries)
+        frames: list[pd.DataFrame] = []
+        for label, target_bundle in target_bundles:
+            raw_prefix = raw_root / (
+                backend if label == "base" else f"{backend}_{label}"
+            )
+            search_config = alignment_config
+            if label == "base" and assets.shadowed_entries:
+                lookup = Path(f"{bundle.search_target}.lookup")
+                with lookup.open() as handle:
+                    replaced = sum(
+                        (
+                            line.split("\t", 2)[1].removeprefix("pdb_0000")[:4]
+                            if backend == "foldseek"
+                            else line.split("\t", 2)[1].split("_", 1)[0]
+                        )
+                        in assets.shadowed_entries
+                        for line in handle
+                    )
+                search_config = replace(
+                    alignment_config, max_seqs=alignment_config.max_seqs + replaced
+                )
+            run_alignment(
+                aln_type=backend,
+                query_db=query_databases.databases[backend],
+                target_db=target_bundle.conversion_target,
+                search_target_db=target_bundle.search_target,
+                cluster_alignment_db=target_bundle.cluster_alignments,
+                search_db=backend_scratch / f"result_{label}",
+                aln_file=raw_prefix,
+                alignment_config=search_config,
+                tmp_dir=backend_scratch / f"tmp_{label}",
+                remove_tmp=True,
+                threads=threads,
+            )
+            mapped = output_dir / f"{backend}_{label}.parquet" if combine else output
+            map_custom_alignment_hits(
+                raw_alignment=raw_prefix.with_suffix(".parquet"),
+                backend=backend,
+                query_databases=query_databases,
+                alignment_chain_lookup=assets.alignment_chain_lookup,
+                output_path=mapped,
+            )
+            if combine:
+                frame = pd.read_parquet(mapped)
+                if label == "base":
+                    frame = frame.loc[
+                        ~frame["target_entry"].astype(str).isin(assets.shadowed_entries)
+                    ]
+                frames.append(frame)
+                mapped.unlink()
+        if combine:
+            pd.concat(frames, ignore_index=True).to_parquet(output, index=False)
         outputs[backend] = output
     return outputs
 

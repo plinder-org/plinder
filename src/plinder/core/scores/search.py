@@ -54,6 +54,9 @@ def search(
     other PDB components are omitted. Supply ligand poses through ``ligand_path``.
 
     The returned result contains paths to score tables and alignment files.
+    ``search_config`` controls search filters. Its shared ``evalue`` defaults to
+    0.01; ``foldseek_evalue``, ``mmseqs_evalue`` and ``steam_evalue`` override it
+    independently for their respective backends.
     Input IDs become custom structure IDs in these outputs. Generated ligand
     chain IDs map to the original SDF paths in ``inputs/<input_id>.ligands.tsv``.
     """

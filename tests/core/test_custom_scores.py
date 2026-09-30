@@ -3,7 +3,9 @@
 import json
 import os
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -115,9 +117,97 @@ def test_remote_resolution_requests_only_bounded_assets(tmp_path, monkeypatch):
         "index/alignment_chain_lookup.parquet",
         "search_databases/holo_foldseek",
         "search_databases/holo_mmseqs",
+        "search_databases/manifest.json",
         "ligand_archives/xy.parquet",
     }
     assert assets.ligand_archives == {"xy": archive}
+
+
+def test_resolve_custom_scoring_assets_includes_weekly_search_overlay(tmp_path):
+    _write_index(tmp_path)
+    for backend in custom.SEARCH_BACKENDS:
+        _write_search_bundle(tmp_path / "search_databases" / f"holo_{backend}", backend)
+    overlay = tmp_path / "search_databases/weekly_delta/holo_mmseqs"
+    _write_search_bundle(overlay, "mmseqs")
+    pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(
+        tmp_path / "search_databases/shadowed_entries.parquet", index=False
+    )
+    (tmp_path / "search_databases/manifest.json").write_text(
+        json.dumps(
+            {
+                "overlays": {"mmseqs": {}},
+                "shadowed_entries": "shadowed_entries.parquet",
+            }
+        )
+    )
+
+    assets = custom.resolve_custom_scoring_assets(data_dir=tmp_path)
+
+    assert assets.shadowed_entries == {"1abc"}
+    assert assets.overlay_search_databases["mmseqs"].root == overlay
+
+
+def test_custom_search_replaces_shadowed_base_hits_with_overlay(tmp_path, monkeypatch):
+    from plinder.data.annotations import get_similarity_scores
+
+    base_target = tmp_path / "base/clustered"
+    base_target.parent.mkdir()
+    Path(f"{base_target}.lookup").write_text(
+        "0\tpdb_00001abc_xyz-enrich_A\t0\n1\tpdb_00002def_xyz-enrich_A\t0\n"
+    )
+    base_bundle = custom.SearchDatabaseBundle(
+        backend="foldseek",
+        root=base_target.parent,
+        search_target=base_target,
+        conversion_target=base_target,
+        cluster_alignments=None,
+        manifest={},
+    )
+    overlay_target = tmp_path / "overlay/clustered"
+    overlay_target.parent.mkdir()
+    overlay_bundle = replace(
+        base_bundle,
+        root=overlay_target.parent,
+        search_target=overlay_target,
+        conversion_target=overlay_target,
+    )
+    assets = custom.CustomScoringAssets(
+        annotation_table=tmp_path / "annotation.parquet",
+        entry_chains=tmp_path / "chains.parquet",
+        interface_annotations=tmp_path / "interfaces.parquet",
+        alignment_chain_lookup=tmp_path / "lookup.parquet",
+        search_databases={"foldseek": base_bundle},
+        ligand_archives={},
+        overlay_search_databases={"foldseek": overlay_bundle},
+        shadowed_entries=frozenset({"1abc"}),
+    )
+    calls = []
+
+    def fake_alignment(**kwargs):
+        calls.append(kwargs["alignment_config"].max_seqs)
+
+    def fake_mapping(*, raw_alignment, output_path, **_kwargs):
+        entries = (
+            ["1abc"] if raw_alignment.stem.endswith("overlay") else ["1abc", "2def"]
+        )
+        pd.DataFrame({"target_entry": entries}).to_parquet(output_path, index=False)
+
+    monkeypatch.setattr(get_similarity_scores, "run_alignment", fake_alignment)
+    monkeypatch.setattr(custom, "map_custom_alignment_hits", fake_mapping)
+    result = custom.run_custom_protein_searches(
+        query_databases=SimpleNamespace(databases={"foldseek": tmp_path / "query"}),
+        assets=assets,
+        output_dir=tmp_path / "results",
+        scratch_dir=tmp_path / "scratch",
+        config=custom.CustomProteinSearchConfig(max_seqs=10),
+        backends=("foldseek",),
+    )
+
+    assert calls == [11, 10]
+    assert pd.read_parquet(result["foldseek"])["target_entry"].tolist() == [
+        "2def",
+        "1abc",
+    ]
 
 
 def test_ligand_coordinates_are_not_resolved_before_targets_are_known(
@@ -675,6 +765,27 @@ def test_custom_search_defaults_keep_coverage_and_disable_identity_filter():
     assert config.max_seqs == 10_000
     assert config.coverage == 0.0
     assert config.min_seq_id == 0.0
+    for backend in ("foldseek", "mmseqs", "steam"):
+        assert config.evalue_for(backend) == 0.01
+
+
+def test_custom_search_backend_evalues():
+    config = custom.CustomProteinSearchConfig(
+        foldseek_evalue=0.001, mmseqs_evalue=0.1, steam_evalue=1.0
+    )
+    assert config.evalue_for("foldseek") == 0.001
+    assert config.evalue_for("mmseqs") == 0.1
+    assert config.evalue_for("steam") == 1.0
+    assert custom.CustomProteinSearchConfig(evalue=0.5).evalue_for("steam") == 0.5
+
+
+@pytest.mark.parametrize(
+    "field", ["evalue", "foldseek_evalue", "mmseqs_evalue", "steam_evalue"]
+)
+@pytest.mark.parametrize("value", [-1.0, float("nan")])
+def test_custom_search_rejects_invalid_evalues(field, value):
+    with pytest.raises(ValueError, match="E-values must be nonnegative"):
+        custom.CustomProteinSearchConfig(**{field: value})
 
 
 def test_custom_protein_searches_against_local_release(test_dir, tmp_path):
