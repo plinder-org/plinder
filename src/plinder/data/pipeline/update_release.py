@@ -5,8 +5,14 @@
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
 import json
+import logging
 import os
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from dataclasses import replace
+from multiprocessing import get_context
 from pathlib import Path
 from shutil import copyfile, rmtree
 from typing import Any, Iterable, cast
@@ -14,6 +20,7 @@ from typing import Any, Iterable, cast
 import duckdb
 import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from omegaconf import DictConfig, OmegaConf
 
@@ -25,15 +32,23 @@ from plinder.core.utils.files import (
     read_json_cache,
     write_json_atomic,
 )
-from plinder.data import clusters, databases, protein_clusters
+from plinder.data import clusters, databases
 from plinder.data.annotations import get_similarity_scores
 from plinder.data.pipeline import config, score, tasks, utils
 from plinder.data.pipeline.update_archives import update_ligand_archives
 from plinder.data.pipeline.update_entries import apply_entry_update
 from plinder.data.pipeline.updates import load_update_plan
+from plinder.data.pipeline.weekly_clusters import (
+    extend_interface_clusters,
+    extend_ligand_clusters,
+    extend_protein_clusters,
+)
+
+LOG = logging.getLogger(__name__)
 
 _BASE_ARTIFACT_ROOTS = (
     "alignments",
+    "alignment_cigars",
     "ccd_dbs",
     "dbs",
     "exports",
@@ -51,7 +66,7 @@ _BASE_ARTIFACT_ROOTS = (
     "scores",
     "search_databases",
 )
-_TRANSIENT_BASE_DIRECTORIES = {".staging", "ligand_3d_pair_repairs"}
+_TRANSIENT_BASE_DIRECTORIES = {".staging", "ligand_3d_pair_repairs", "ligand_3d_pairs"}
 _TRANSIENT_BASE_SUFFIXES = (".installing", ".previous", ".tmp", ".tmp.parquet")
 
 _STAGES = (
@@ -60,7 +75,7 @@ _STAGES = (
     "alignments",
     "scores",
     "ligand_chemistry",
-    "similarity_covers",
+    "cluster_assignments",
     "final_tables",
 )
 
@@ -77,8 +92,14 @@ def _reuse_base_artifacts(base: Path, workspace: Path) -> None:
             target_dir = workspace / relative
             target_dir.mkdir(parents=True, exist_ok=True)
             for name in list(directories):
-                if name in _TRANSIENT_BASE_DIRECTORIES or name.endswith(
-                    _TRANSIENT_BASE_SUFFIXES
+                if (
+                    name in _TRANSIENT_BASE_DIRECTORIES
+                    or (root_name == "dbs" and name == "aln")
+                    or (
+                        relative.as_posix() == "dbs/subdbs"
+                        and name in {"search_db=holo", "search_db=apo"}
+                    )
+                    or name.endswith(_TRANSIENT_BASE_SUFFIXES)
                 ):
                     directories.remove(name)
                     continue
@@ -124,14 +145,6 @@ def _scoring_chains(data_dir: Path, search_db: str) -> pd.DataFrame:
     )
 
 
-def _query_chains(data_dir: Path, search_db: str) -> pd.DataFrame:
-    if search_db == "apo":
-        return tasks._ligand_apo_query_chains(data_dir)
-    if search_db == "interface_apo":
-        return tasks._interface_apo_query_chains(data_dir)
-    return _scoring_chains(data_dir, search_db)
-
-
 def _query_manifest(data_dir: Path, search_db: str) -> Path:
     if search_db == "apo":
         return data_dir / score.LINKED_APO_QUERY_MANIFEST_RELATIVE
@@ -153,6 +166,118 @@ def _database_identifiers(chains: pd.DataFrame, alignment_type: str) -> set[str]
     }
 
 
+def _prepare_weekly_search_overlay(
+    *,
+    base: Path,
+    data_dir: Path,
+    affected: set[str],
+    nextgen_root: Path,
+    search_databases: list[str],
+    scratch_dir: Path,
+    threads: int,
+) -> set[str]:
+    """Keep the full search DB fixed and index cumulative changed chains."""
+    shadowed_path = Path("manifests/weekly_shadowed_entries.parquet")
+    previous = base / shadowed_path
+    shadowed = set(affected)
+    if previous.is_file():
+        shadowed.update(
+            map(str, pq.read_table(previous, columns=["pdb_id"])["pdb_id"].to_pylist())
+        )
+    chains = pd.read_parquet(
+        data_dir / "index/entry_chains.parquet",
+        columns=[
+            "entry_pdb_id",
+            "chain_auth_id",
+            "chain_receptor_type",
+            "chain_sequence",
+        ],
+        filters=[("entry_pdb_id", "in", sorted(shadowed))],
+    )
+    proteins = chains.loc[
+        chains.chain_receptor_type.eq("protein") & chains.chain_auth_id.notna()
+    ].copy()
+    active = set(proteins.entry_pdb_id.astype(str))
+    overlay = data_dir / "dbs/weekly_delta"
+    if active:
+        staging = scratch_dir / "weekly_delta_build"
+        rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True)
+        foldseek_input = staging / "foldseek_inputs.tsv"
+        with foldseek_input.open("w") as handle:
+            for pdb_id in sorted(active):
+                source = (
+                    nextgen_root
+                    / "data/entries/divided"
+                    / pdb_id[1:3]
+                    / f"pdb_0000{pdb_id}"
+                    / f"pdb_0000{pdb_id}_xyz-enrich.cif.gz"
+                )
+                if not source.is_file():
+                    raise FileNotFoundError(source)
+                handle.write(f"{source}\n")
+        proteins["identifier"] = (
+            proteins.entry_pdb_id.astype(str) + "_" + proteins.chain_auth_id.astype(str)
+        )
+        conflicts = proteins.groupby("identifier").chain_sequence.nunique()
+        if conflicts.gt(1).any():
+            raise ValueError("changed chains have conflicting auth-chain sequences")
+        sequences = proteins.dropna(subset=["chain_sequence"]).drop_duplicates(
+            "identifier"
+        )
+        sequences = sequences.loc[sequences.chain_sequence.ne("")]
+        if not sequences.chain_sequence.astype(str).str.fullmatch("[A-Za-z]+").all():
+            raise ValueError("changed protein sequences contain invalid residues")
+        mmseqs_input = staging / "mmseqs_inputs.fasta"
+        with mmseqs_input.open("w") as handle:
+            for row in sequences.itertuples(index=False):
+                handle.write(f">{row.identifier}\n{row.chain_sequence}\n")
+        sources_by_backend = {"foldseek": foldseek_input}
+        if not sequences.empty:
+            sources_by_backend["mmseqs"] = mmseqs_input
+        for backend, source in sources_by_backend.items():
+            databases.create_db(source, staging / backend, backend, threads=threads)
+
+        selected: dict[str, set[str]] = {}
+        sources: dict[str, Path] = {}
+        for search_db in search_databases:
+            if search_db == "pred":
+                continue
+            target_chains = _scoring_chains(data_dir, search_db)
+            target_chains = target_chains.loc[
+                target_chains.entry_pdb_id.astype(str).isin(active)
+            ]
+            for backend in ("foldseek", "mmseqs"):
+                if backend not in sources_by_backend:
+                    continue
+                identifiers = _database_identifiers(target_chains, backend)
+                if identifiers:
+                    key = f"{search_db}_{backend}"
+                    selected[key] = identifiers
+                    sources[key] = staging / backend / backend
+        if sources:
+            databases.make_sub_dbs(
+                staging / "subdbs",
+                sources,
+                identifiers_by_database=selected,
+                tmp_dir=scratch_dir / "exact-search-dbs",
+                threads=threads,
+            )
+        databases.install_database_directory(staging, overlay)
+    elif overlay.exists():
+        rmtree(overlay)
+
+    target = data_dir / shadowed_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(".parquet.tmp")
+    pq.write_table(
+        pa.table({"pdb_id": pa.array(sorted(shadowed), type=pa.string())}),
+        temporary,
+    )
+    temporary.replace(target)
+    return shadowed
+
+
 def _queries_with_old_target_hits(
     data_dir: Path, *, search_db: str, affected: set[str]
 ) -> set[str]:
@@ -163,8 +288,11 @@ def _queries_with_old_target_hits(
         for alignment_type in ("foldseek", "mmseqs")
         for path in sorted(
             (
-                data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
-            ).glob("*.parquet")
+                data_dir
+                / "alignment_cigars"
+                / f"search_db={search_db}"
+                / f"alignment_type={alignment_type}"
+            ).glob("shard=*.parquet")
         )
     ]
     if not paths:
@@ -173,17 +301,16 @@ def _queries_with_old_target_hits(
     try:
         connection.register(
             "affected_targets",
-            pd.DataFrame({"target_pdb_id": sorted(affected)}),
+            pd.DataFrame({"target_entry": sorted(affected)}),
         )
-        sources = ", ".join(f"'{path.as_posix()}'" for path in paths)
+        sources = ", ".join(
+            f"'{path.as_posix().replace(chr(39), chr(39) * 2)}'" for path in paths
+        )
         hits = connection.sql(
             f"""
-            SELECT DISTINCT regexp_extract(filename, '/([^/]+)\\.parquet$', 1)
-                AS query_entry
-            FROM read_parquet(
-                [{sources}], union_by_name=true, filename=true
-            ) AS alignments
-            INNER JOIN affected_targets USING (target_pdb_id)
+            SELECT DISTINCT query_entry
+            FROM read_parquet([{sources}], union_by_name=true) AS alignments
+            INNER JOIN affected_targets USING (target_entry)
             """
         ).df()
     finally:
@@ -210,10 +337,29 @@ def _changed_target_database(
     target_dir = scratch_dir / f"changed-{search_db}-targets"
     if target_dir.exists():
         rmtree(target_dir)
+    selected = {
+        key: ids
+        for key, ids in identifiers.items()
+        if ids
+        and (
+            data_dir
+            / "dbs/weekly_delta"
+            / key.rsplit("_", 1)[1]
+            / f"{key.rsplit('_', 1)[1]}.dbtype"
+        ).is_file()
+    }
+    if not selected:
+        return None
     databases.make_sub_dbs(
         target_dir,
-        utils.get_db_sources(data_dir=data_dir, sub_databases=[search_db]),
-        identifiers_by_database=identifiers,
+        {
+            key: data_dir
+            / "dbs/weekly_delta"
+            / key.rsplit("_", 1)[1]
+            / key.rsplit("_", 1)[1]
+            for key in selected
+        },
+        identifiers_by_database=selected,
         tmp_dir=scratch_dir / f"changed-{search_db}-target-work",
         threads=threads,
     )
@@ -231,39 +377,65 @@ def _search_changed_targets(
     mmseqs_cfg: DictConfig,
     scratch_dir: Path,
     threads: int,
-    batch_size: int,
 ) -> set[str]:
     if target_database_dir is None or not query_ids:
         return set()
-    query_auth_ids = _chains_by_entry(_query_chains(data_dir, search_db))
+    scorer, _, work = utils.get_scorer(
+        data_dir=data_dir,
+        pdb_ids=[],
+        scorer_cfg=scorer_cfg,
+        load_entries=False,
+        foldseek_cfg=foldseek_cfg,
+        mmseqs_cfg=mmseqs_cfg,
+        scratch_dir=scratch_dir / "queries",
+    )
     hits: set[str] = set()
-    for start in range(0, len(query_ids), batch_size):
-        batch = query_ids[start : start + batch_size]
-        batch_root = scratch_dir / f"reverse-{search_db}-{start // batch_size:05d}"
-        scorer, _, work = utils.get_scorer(
-            data_dir=data_dir,
-            pdb_ids=batch,
-            scorer_cfg=scorer_cfg,
-            load_entries=False,
-            foldseek_cfg=foldseek_cfg,
-            mmseqs_cfg=mmseqs_cfg,
-            scratch_dir=batch_root / "queries",
-        )
-        try:
-            hits.update(
-                scorer.run_alignments(
-                    entry_ids=batch,
-                    search_db=search_db,
-                    output_folder=work,
-                    threads=threads,
-                    query_chain_auth_ids=query_auth_ids,
-                    target_database_dir=target_database_dir,
-                    result_database_dir=batch_root / "results",
-                    write_empty_results=False,
-                )
+    active = set(query_ids)
+    try:
+        for aln_type in ("mmseqs", "foldseek"):
+            if not (
+                target_database_dir / f"{search_db}_{aln_type}/exact_cluster.json"
+            ).is_file():
+                continue
+            changed_db, _, _ = databases.exact_search_database_paths(
+                target_database_dir, search_db, aln_type
             )
-        finally:
-            rmtree(batch_root, ignore_errors=True)
+            probe_dir = work / search_db / aln_type
+            probe_dir.mkdir(parents=True, exist_ok=True)
+            # Candidate discovery is permissive; the usual forward search
+            # applies the requested cutoff and produces the release scores.
+            probe_config = replace(
+                scorer.get_config(search_db, aln_type),
+                evalue=2.0,
+                max_seqs=2_000_000,
+                coverage=0.0,
+                min_seq_id=0.0,
+            )
+            full_databases = [scorer.source_to_full_db_file[f"holo_{aln_type}"]]
+            overlay = data_dir / "dbs/weekly_delta" / aln_type / aln_type
+            if overlay.with_suffix(".dbtype").is_file():
+                full_databases.append(overlay)
+            for index, full_db in enumerate(full_databases):
+                target_identifiers = get_similarity_scores.run_alignment(
+                    aln_type=aln_type,
+                    query_db=changed_db,
+                    target_db=full_db,
+                    search_target_db=full_db,
+                    search_db=probe_dir / f"search-{index}",
+                    aln_file=probe_dir / f"hits-{index}.tsv",
+                    alignment_config=probe_config,
+                    tmp_dir=probe_dir / f"tmp-{index}",
+                    threads=threads,
+                    query_ids_only=True,
+                    id_column="target",
+                )
+                hits.update(
+                    identifier.removeprefix("pdb_0000")[:4]
+                    for identifier in target_identifiers or ()
+                    if identifier.removeprefix("pdb_0000")[:4] in active
+                )
+    finally:
+        rmtree(work, ignore_errors=True)
     return hits
 
 
@@ -290,51 +462,48 @@ def _refresh_alignment_shards(
     *,
     search_db: str,
     shards: set[str],
+    replacement_query_ids: set[str],
+    replacement_target_ids: set[str] | None = None,
     scorer_cfg: DictConfig,
     scratch_dir: Path,
+    threads: int,
 ) -> None:
-    for shard in sorted(shards):
-        raw_exists = any(
-            any(
-                path.stem[1:3] == shard
-                for path in (
-                    data_dir
-                    / "dbs"
-                    / "subdbs"
-                    / f"{search_db}_{alignment_type}"
-                    / "aln"
-                ).glob("*.parquet")
-            )
-            for alignment_type in ("foldseek", "mmseqs")
+    def refresh(shard: str) -> None:
+        tasks.map_batch_alignments(
+            data_dir=data_dir,
+            shards=[shard],
+            scorer_cfg=scorer_cfg,
+            force_update=True,
+            scratch_dir=scratch_dir,
+            search_db=search_db,
+            replacement_query_ids={
+                pdb_id for pdb_id in replacement_query_ids if pdb_id[1:3] == shard
+            },
+            replacement_target_ids=replacement_target_ids,
         )
-        if raw_exists:
-            tasks.map_batch_alignments(
-                data_dir=data_dir,
-                shards=[shard],
-                scorer_cfg=scorer_cfg,
-                force_update=True,
-                scratch_dir=scratch_dir,
-                search_db=search_db,
-            )
-            continue
-        for alignment_type in ("foldseek", "mmseqs"):
-            (
-                data_dir
-                / "alignments"
-                / f"search_db={search_db}"
-                / f"alignment_type={alignment_type}"
-                / f"shard={shard}.parquet"
-            ).unlink(missing_ok=True)
-            tasks._alignment_cigar_path(
+        if any(
+            tasks._alignment_release_path(
                 data_dir=data_dir,
                 search_db=search_db,
                 alignment_type=alignment_type,
                 shard=shard,
-            ).unlink(missing_ok=True)
+            ).is_file()
+            for alignment_type in ("foldseek", "mmseqs")
+        ):
+            return
         manifest_root = data_dir / "alignments" / "manifests"
         if search_db != "holo":
             manifest_root = manifest_root / f"search_db={search_db}"
         (manifest_root / f"shard={shard}.json").unlink(missing_ok=True)
+
+    ordered = sorted(shards)
+    workers = min(4, threads, len(ordered))
+    if workers == 1:
+        for shard in ordered:
+            refresh(shard)
+    elif workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(refresh, ordered))
 
 
 def _rebase_unchanged_alignment_manifests(
@@ -352,19 +521,11 @@ def _rebase_unchanged_alignment_manifests(
         if shard in repaired_shards:
             continue
         payload = json.loads(path.read_text())
-        inputs = tasks._alignment_input_signatures(
-            data_dir=data_dir, search_db=search_db, shard=shard
-        )
-        if payload.get("inputs") != inputs:
-            raise ValueError(f"untouched raw alignment inputs changed: {path}")
+        inputs = payload.get("inputs")
+        if not isinstance(inputs, dict):
+            raise ValueError(f"invalid alignment report inputs: {path}")
         outputs = payload.get("outputs")
-        publishes_cigars = payload.get("publish_alignment_cigars")
-        cigar_outputs = payload.get("cigar_outputs")
-        if (
-            not isinstance(outputs, dict)
-            or not isinstance(publishes_cigars, bool)
-            or not isinstance(cigar_outputs, dict)
-        ):
+        if not isinstance(outputs, dict):
             raise ValueError(f"invalid alignment report: {path}")
         for alignment_type, signatures in inputs.items():
             output = tasks._alignment_release_path(
@@ -376,13 +537,12 @@ def _rebase_unchanged_alignment_manifests(
             if not signatures:
                 if outputs.get(alignment_type) is not None:
                     raise ValueError(f"unexpected mapped alignment output: {output}")
-                if publishes_cigars and cigar_outputs.get(alignment_type) is not None:
-                    raise ValueError(f"unexpected alignment CIGAR output: {output}")
                 continue
             if not output.is_file() or not (
                 schemas.release_alignment_mapping_schema_is_current(
                     set(pq.read_schema(output).names),
                     alignment_type=alignment_type,
+                    include_scores=search_db != "holo",
                 )
             ):
                 raise ValueError(f"invalid mapped alignment output: {output}")
@@ -393,24 +553,6 @@ def _rebase_unchanged_alignment_manifests(
                 "mtime_ns": stat.st_mtime_ns,
             }:
                 raise ValueError(f"mapped alignment report changed: {output}")
-            if publishes_cigars:
-                cigars = tasks._alignment_cigar_path(
-                    data_dir=data_dir,
-                    search_db=search_db,
-                    alignment_type=alignment_type,
-                    shard=shard,
-                )
-                if not cigars.is_file() or not pq.read_schema(cigars).equals(
-                    schemas.ALIGNMENT_CIGAR_SCHEMA
-                ):
-                    raise ValueError(f"invalid alignment CIGAR output: {cigars}")
-                stat = cigars.stat()
-                if cigar_outputs.get(alignment_type) != {
-                    "name": cigars.name,
-                    "size": stat.st_size,
-                    "mtime_ns": stat.st_mtime_ns,
-                }:
-                    raise ValueError(f"alignment CIGAR report changed: {cigars}")
         payload["alignment_chain_lookup"] = lookup
         write_json_atomic(path, payload)
 
@@ -425,7 +567,6 @@ def _plan_alignment_repairs(
     mmseqs_cfg: DictConfig,
     scratch_dir: Path,
     threads: int,
-    batch_size: int,
 ) -> set[str]:
     """Find queries whose capped search can change in either direction."""
     manifest_path = _query_manifest(data_dir, search_db)
@@ -454,7 +595,6 @@ def _plan_alignment_repairs(
         mmseqs_cfg=mmseqs_cfg,
         scratch_dir=scratch_dir,
         threads=threads,
-        batch_size=batch_size,
     )
     return active.intersection(affected | old_hits | reverse_hits)
 
@@ -487,7 +627,6 @@ def _load_or_plan_alignment_repairs(
                     mmseqs_cfg=mmseqs_cfg,
                     scratch_dir=scratch_dir / search_db,
                     threads=threads,
-                    batch_size=batch_size,
                 )
             )
             for search_db in search_databases
@@ -508,6 +647,7 @@ def repair_alignments(
     search_db: str,
     affected: set[str],
     full_queries: set[str],
+    targeted_queries: set[str] | None = None,
     scorer_cfg: DictConfig,
     foldseek_cfg: DictConfig,
     mmseqs_cfg: DictConfig,
@@ -515,12 +655,13 @@ def repair_alignments(
     threads: int,
     batch_size: int,
 ) -> set[str]:
-    """Replace the previously planned alignment queries and their mapped shards."""
+    """Fully search changed queries and add changed-target hits to old queries."""
     manifest_path = _query_manifest(data_dir, search_db)
     active = set(
         pd.read_parquet(manifest_path, columns=["pdb_id"])["pdb_id"].astype(str)
     )
     full_queries = active.intersection(full_queries)
+    targeted_queries = active.intersection(targeted_queries or set()) - full_queries
     inactive = affected.difference(active)
     _remove_inactive_queries(data_dir, search_db=search_db, pdb_ids=inactive)
     configured_search_db = "apo" if search_db == "interface_apo" else search_db
@@ -528,39 +669,363 @@ def repair_alignments(
         DictConfig,
         OmegaConf.merge(scorer_cfg, {"sub_databases": [configured_search_db]}),
     )
-    for start in range(0, len(full_queries), batch_size):
-        tasks.run_batch_searches(
-            data_dir=data_dir,
-            pdb_ids=sorted(full_queries)[start : start + batch_size],
-            scorer_cfg=selected_cfg,
-            foldseek_cfg=foldseek_cfg,
-            mmseqs_cfg=mmseqs_cfg,
-            cpu=threads,
-            scratch_dir=scratch_dir / f"full-{search_db}-{start // batch_size:05d}",
-            search_databases=[search_db],
-            force_update=True,
+    for alignment_type in ("foldseek", "mmseqs"):
+        raw_dir = data_dir / "dbs/subdbs" / f"{search_db}_{alignment_type}" / "aln"
+        for pdb_id in full_queries | targeted_queries:
+            (raw_dir / f"{pdb_id}.parquet").unlink(missing_ok=True)
+    if targeted_queries:
+        changed_targets = _changed_target_database(
+            data_dir,
+            search_db=search_db,
+            affected=affected,
+            scratch_dir=scratch_dir / "changed-targets",
+            threads=threads,
         )
-    touched_shards = {pdb_id[1:3] for pdb_id in full_queries | inactive}
-    _refresh_alignment_shards(
+        if changed_targets is None:
+            # Obsolete targets have no database to search. Re-search their old
+            # query partners to remove stale hits.
+            full_queries.update(targeted_queries)
+            targeted_queries.clear()
+        else:
+            # Arrow limits the partitioned raw output to 1,024 query PDBs
+            # per write batch.
+            targeted_batch_size = min(batch_size, 500)
+            available_backends = [
+                backend
+                for backend in ("foldseek", "mmseqs")
+                if (
+                    changed_targets / f"{search_db}_{backend}/exact_cluster.json"
+                ).is_file()
+            ]
+            shadowed_path = data_dir / "manifests/weekly_shadowed_entries.parquet"
+            shadowed = set(
+                map(
+                    str,
+                    pq.read_table(shadowed_path, columns=["pdb_id"])[
+                        "pdb_id"
+                    ].to_pylist(),
+                )
+            )
+            for source_label, query_ids in (
+                ("base", targeted_queries - shadowed),
+                ("overlay", targeted_queries & shadowed),
+            ):
+                ordered_targets = sorted(query_ids)
+                for start in range(0, len(ordered_targets), targeted_batch_size):
+                    tasks.run_batch_searches(
+                        data_dir=data_dir,
+                        pdb_ids=ordered_targets[start : start + targeted_batch_size],
+                        scorer_cfg=selected_cfg,
+                        foldseek_cfg=foldseek_cfg,
+                        mmseqs_cfg=mmseqs_cfg,
+                        cpu=threads,
+                        scratch_dir=(
+                            scratch_dir / f"targeted-{search_db}-{source_label}-"
+                            f"{start // targeted_batch_size:05d}"
+                        ),
+                        search_databases=[search_db],
+                        alignment_types=available_backends,
+                        force_update=True,
+                        target_database_dir=changed_targets,
+                        query_database_dir=(
+                            data_dir / "dbs/weekly_delta"
+                            if source_label == "overlay"
+                            else None
+                        ),
+                    )
+            targeted_shards = {pdb_id[1:3] for pdb_id in targeted_queries}
+            _refresh_alignment_shards(
+                data_dir,
+                search_db=search_db,
+                shards=targeted_shards,
+                replacement_query_ids=targeted_queries,
+                replacement_target_ids=affected,
+                scorer_cfg=selected_cfg,
+                scratch_dir=scratch_dir / f"map-targeted-{search_db}",
+                threads=threads,
+            )
+            for alignment_type in ("foldseek", "mmseqs"):
+                raw_dir = (
+                    data_dir / "dbs/subdbs" / f"{search_db}_{alignment_type}" / "aln"
+                )
+                for pdb_id in targeted_queries:
+                    (raw_dir / f"{pdb_id}.parquet").unlink(missing_ok=True)
+    shadowed_path = data_dir / "manifests/weekly_shadowed_entries.parquet"
+    shadowed = set(
+        map(str, pq.read_table(shadowed_path, columns=["pdb_id"])["pdb_id"].to_pylist())
+    )
+    for source_label, query_ids in (
+        ("base", full_queries - shadowed),
+        ("overlay", full_queries & shadowed),
+    ):
+        ordered = sorted(query_ids)
+        for start in range(0, len(ordered), batch_size):
+            tasks.run_batch_searches(
+                data_dir=data_dir,
+                pdb_ids=ordered[start : start + batch_size],
+                scorer_cfg=selected_cfg,
+                foldseek_cfg=foldseek_cfg,
+                mmseqs_cfg=mmseqs_cfg,
+                cpu=threads,
+                scratch_dir=(
+                    scratch_dir
+                    / f"full-{search_db}-{source_label}-{start // batch_size:05d}"
+                ),
+                search_databases=[search_db],
+                force_update=True,
+                query_database_dir=(
+                    data_dir / "dbs/weekly_delta" if source_label == "overlay" else None
+                ),
+            )
+    missing_raw = [
+        f"{search_db}_{alignment_type}/{pdb_id}"
+        for alignment_type in ("foldseek", "mmseqs")
+        for pdb_id in sorted(full_queries)
+        if not (
+            data_dir
+            / "dbs"
+            / "subdbs"
+            / f"{search_db}_{alignment_type}"
+            / "aln"
+            / f"{pdb_id}.parquet"
+        ).is_file()
+    ]
+    if missing_raw:
+        raise FileNotFoundError(f"missing weekly alignment results: {missing_raw[:10]}")
+    full_shards = {pdb_id[1:3] for pdb_id in full_queries | inactive}
+    if full_shards:
+        _refresh_alignment_shards(
+            data_dir,
+            search_db=search_db,
+            shards=full_shards,
+            replacement_query_ids=full_queries | inactive,
+            scorer_cfg=selected_cfg,
+            scratch_dir=scratch_dir / f"map-{search_db}",
+            threads=threads,
+        )
+    _rebase_unchanged_alignment_manifests(
         data_dir,
         search_db=search_db,
-        shards=touched_shards,
-        scorer_cfg=selected_cfg,
-        scratch_dir=scratch_dir / f"map-{search_db}",
-    )
-    _rebase_unchanged_alignment_manifests(
-        data_dir, search_db=search_db, repaired_shards=touched_shards
+        repaired_shards=full_shards | {pdb_id[1:3] for pdb_id in targeted_queries},
     )
     return full_queries
 
 
 def _write_pdb_manifest(path: Path, pdb_ids: Iterable[str]) -> Path:
     path.parent.mkdir(exist_ok=True, parents=True)
-    frame = pd.DataFrame({"pdb_id": sorted(set(map(str, pdb_ids)))})
+    identifiers = sorted(set(map(str, pdb_ids)))
+    if path.is_file() and pd.read_parquet(path)["pdb_id"].tolist() == identifiers:
+        return path
+    frame = pd.DataFrame({"pdb_id": identifiers})
     temporary = path.with_suffix(path.suffix + ".tmp")
     frame.to_parquet(temporary, index=False)
     temporary.replace(path)
     return path
+
+
+def _refresh_foldseek_source_manifest(
+    data_dir: Path, *, nextgen_root: Path, affected: set[str]
+) -> None:
+    """Point reused Foldseek source paths at the current managed snapshot."""
+    manifest = data_dir / "manifests/foldseek_createdb_inputs.tsv"
+    if not manifest.is_file() or not affected:
+        return
+    lines = manifest.read_text().splitlines()
+    updated: list[str] = []
+    for line in lines:
+        old = Path(line)
+        pdb_id = old.parent.name.removeprefix("pdb_0000")
+        if pdb_id in affected:
+            current = (
+                nextgen_root
+                / "data/entries/divided"
+                / pdb_id[1:3]
+                / f"pdb_0000{pdb_id}"
+                / old.name
+            )
+            if current.is_file():
+                line = str(current)
+        updated.append(line)
+    if updated != lines:
+        temporary = manifest.with_suffix(".tmp")
+        temporary.write_text("\n".join(updated) + "\n")
+        temporary.replace(manifest)
+
+
+def _changed_ligand_archive_entries(
+    base_data_dir: Path, data_dir: Path, affected: set[str]
+) -> set[str]:
+    """Identify entries whose ligand poses or features actually changed."""
+    by_shard: dict[str, list[str]] = {}
+    for pdb_id in sorted(affected):
+        by_shard.setdefault(pdb_id[1:3], []).append(pdb_id)
+
+    changed: set[str] = set()
+    for shard, pdb_ids in by_shard.items():
+
+        def archive_rows(root: Path) -> dict[str, list[dict[str, Any]]]:
+            path = root / "ligand_archives" / f"{shard}.parquet"
+            if not path.is_file():
+                return {}
+            rows = pq.read_table(
+                path,
+                columns=["pdb_id", "ligand_asym_id", "sdf", "pharmacophore_features"],
+                filters=[("pdb_id", "in", pdb_ids)],
+            ).to_pylist()
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for row in rows:
+                grouped.setdefault(str(row["pdb_id"]), []).append(row)
+            return grouped
+
+        before = archive_rows(base_data_dir)
+        after = archive_rows(data_dir)
+        for pdb_id in pdb_ids:
+            ordered_before = sorted(
+                before.get(pdb_id, []), key=lambda row: row["ligand_asym_id"]
+            )
+            ordered_after = sorted(
+                after.get(pdb_id, []), key=lambda row: row["ligand_asym_id"]
+            )
+            if ordered_before != ordered_after:
+                changed.add(pdb_id)
+    return changed
+
+
+def _unchanged_scoring_entries(
+    base: Path, data_dir: Path, affected: set[str]
+) -> set[str]:
+    """Find revised entries whose coordinate and scoring inputs are unchanged."""
+    if not affected:
+        return set()
+
+    def source_paths(root: Path) -> dict[str, Path]:
+        manifest = root / "manifests/foldseek_createdb_inputs.tsv"
+        if not manifest.is_file():
+            return {}
+        paths: dict[str, Path] = {}
+        with manifest.open() as lines:
+            for line in lines:
+                path = Path(line.strip())
+                pdb_id = path.parent.name.removeprefix("pdb_0000")
+                if pdb_id in affected:
+                    paths[pdb_id] = path
+        return paths
+
+    old_sources = source_paths(base)
+    new_sources = source_paths(data_dir)
+
+    def source_digest(path: Path) -> str:
+        digest = hashlib.sha256()
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    unchanged = {
+        pdb_id
+        for pdb_id in affected & old_sources.keys() & new_sources.keys()
+        if old_sources[pdb_id].is_file()
+        and new_sources[pdb_id].is_file()
+        and (
+            old_sources[pdb_id] == new_sources[pdb_id]
+            or source_digest(old_sources[pdb_id]) == source_digest(new_sources[pdb_id])
+        )
+    }
+    if not unchanged:
+        return set()
+
+    columns_by_table = {
+        "entry_chains": [
+            "chain_asym_id",
+            "chain_auth_id",
+            "chain_type",
+            "chain_receptor_type",
+            "chain_sequence",
+            "chain_sequence_noncanonical",
+            "chain_is_holo",
+            "chain_is_ligand_like",
+        ],
+        "entry_biounit_chains": [
+            "biounit_id",
+            "chain_instance",
+            "chain_asym_id",
+            "chain_role",
+            "chain_num_contacting_ions",
+            "chain_num_contacting_artifacts",
+            "chain_num_contacting_other_ligands",
+            "chain_num_contacting_proteins",
+        ],
+        "annotation_table": [
+            "ligand_id",
+            "system_id",
+            "ligand_smiles",
+            "ligand_is_proper",
+            "ligand_neighboring_residues",
+            "ligand_interactions",
+        ],
+        "interface_annotation_table": [
+            "system_id",
+            "interface_chain_1_residue_numbers",
+            "interface_chain_2_residue_numbers",
+        ],
+    }
+    for table_name, columns in columns_by_table.items():
+
+        def rows(root: Path) -> dict[str, list[dict[str, Any]]] | None:
+            path = root / "index" / f"{table_name}.parquet"
+            if not path.is_file():
+                return None
+            selected = ["entry_pdb_id", *columns]
+            if not set(selected).issubset(pq.read_schema(path).names):
+                return None
+            records = pq.read_table(
+                path,
+                columns=selected,
+                filters=[("entry_pdb_id", "in", sorted(unchanged))],
+            ).to_pylist()
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for record in records:
+                grouped.setdefault(str(record.pop("entry_pdb_id")), []).append(record)
+            return grouped
+
+        before, after = rows(base), rows(data_dir)
+        if before is None or after is None:
+            return set()
+        unchanged = {
+            pdb_id
+            for pdb_id in unchanged
+            if sorted(before.get(pdb_id, []), key=str)
+            == sorted(after.get(pdb_id, []), key=str)
+        }
+        if not unchanged:
+            return set()
+    return unchanged - _changed_ligand_archive_entries(base, data_dir, unchanged)
+
+
+def _entries_with_interfaces(
+    base: Path, data_dir: Path, affected: set[str]
+) -> set[str]:
+    """Return changed entries with interfaces in either release."""
+    if not affected:
+        return set()
+    present: set[str] = set()
+    for root in (base, data_dir):
+        path = root / "index/interface_annotation_table.parquet"
+        if path.is_file():
+            present.update(
+                map(
+                    str,
+                    pq.read_table(
+                        path,
+                        columns=["entry_pdb_id"],
+                        filters=[("entry_pdb_id", "in", sorted(affected))],
+                    )
+                    .column("entry_pdb_id")
+                    .to_pylist(),
+                )
+            )
+    return present
 
 
 def _remove_affected_shape_scores(
@@ -576,18 +1041,24 @@ def _remove_affected_shape_scores(
         return 0
     scratch_dir.mkdir(parents=True, exist_ok=True)
     affected_entries = pd.DataFrame({"pdb_id": sorted(affected)})
-    removed = 0
-    with duckdb.connect() as connection:
-        connection.sql(f"SET threads={threads}")
-        connection.sql(f"SET temp_directory='{scratch_dir.as_posix()}'")
-        connection.register("affected_entries", affected_entries)
-        for shard in sorted(set(map(str, shards))):
-            cached = data_dir / "scores/ligand_3d_by_query" / f"{shard}.parquet"
-            if not cached.is_file():
-                continue
-            temporary = scratch_dir / f"{shard}.parquet"
+    ordered = sorted(set(map(str, shards)))
+    workers = min(4, threads, len(ordered))
+    if not workers:
+        return 0
+
+    def remove(shard: str) -> int:
+        cached = data_dir / "scores/ligand_3d_by_query" / f"{shard}.parquet"
+        if not cached.is_file():
+            return 0
+        shard_scratch = scratch_dir / shard
+        shard_scratch.mkdir(exist_ok=True)
+        temporary = shard_scratch / f"{shard}.parquet"
+        previous_rows = pq.ParquetFile(cached).metadata.num_rows
+        with duckdb.connect() as connection:
+            connection.sql(f"SET threads={max(1, threads // workers)}")
+            connection.sql(f"SET temp_directory='{shard_scratch.as_posix()}'")
+            connection.register("affected_entries", affected_entries)
             temporary.unlink(missing_ok=True)
-            previous_rows = pq.ParquetFile(cached).metadata.num_rows
             connection.execute(
                 f"""
                 COPY (
@@ -617,8 +1088,185 @@ def _remove_affected_shape_scores(
             copyfile(temporary, install)
             install.replace(cached)
             temporary.unlink(missing_ok=True)
-            removed += previous_rows - current_rows
-    return removed
+        return int(previous_rows - current_rows)
+
+    if workers == 1:
+        return sum(remove(shard) for shard in ordered)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return sum(pool.map(remove, ordered))
+
+
+def _restore_score_query_caches(
+    *, base_data_dir: Path, data_dir: Path, query_ids: set[str]
+) -> None:
+    """Restore only the old queries needed for target-only score repair."""
+    by_shard: dict[str, list[str]] = {}
+    for pdb_id in sorted(query_ids):
+        source = base_data_dir / "dbs/subdbs/search_db=holo" / f"{pdb_id}.parquet"
+        if not source.is_file():
+            continue
+        destination = data_dir / "dbs/subdbs/search_db=holo" / source.name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.is_file():
+            link_or_copy_file(source, destination)
+        by_shard.setdefault(pdb_id[1:3], []).append(pdb_id)
+
+    sidecars = (
+        (
+            "ligand_3d_candidate_shards",
+            "ligand_3d_candidates/search_db=holo",
+            schemas.LIGAND_3D_CANDIDATE_SCHEMA,
+        ),
+        (
+            "ligand_pair_score_shards",
+            "ligand_pair_scores/search_db=holo",
+            schemas.LIGAND_PAIR_SCORE_SCHEMA,
+        ),
+    )
+    for shard, pdb_ids in by_shard.items():
+        for packed_name, query_name, schema in sidecars:
+            destinations = {
+                pdb_id: data_dir
+                / "scores"
+                / query_name
+                / f"shard={shard}"
+                / f"{pdb_id}.parquet"
+                for pdb_id in pdb_ids
+            }
+            missing = {
+                pdb_id: path
+                for pdb_id, path in destinations.items()
+                if not path.is_file()
+            }
+            if not missing:
+                continue
+            packed = base_data_dir / "scores" / packed_name / f"shard={shard}.parquet"
+            rows = pq.read_table(
+                packed,
+                columns=schema.names,
+                filters=[("query_entry", "in", list(missing))],
+            ).cast(schema)
+            for pdb_id, destination in missing.items():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                selected = rows.filter(pc.equal(rows["query_entry"], pdb_id))
+                temporary = destination.with_suffix(".parquet.tmp")
+                pq.write_table(selected, temporary, compression="zstd")
+                temporary.replace(destination)
+
+
+def _repair_score_batches(
+    data_dir: Path,
+    repairs: pd.DataFrame,
+    scorer_cfg: DictConfig,
+    scratch_dir: Path,
+    threads: int,
+) -> None:
+    batches = [
+        (str(index), batch.to_dict("records"))
+        for index, batch in repairs.groupby("repair_batch_index", sort=True)
+    ]
+    workers = min(4, max(1, threads // 4), len(batches))
+    if workers < 2:
+        for index, batch in batches:
+            tasks.repair_batch_scores(
+                data_dir=data_dir,
+                repairs=batch,
+                scorer_cfg=scorer_cfg,
+                scratch_dir=scratch_dir / index,
+                threads=threads,
+            )
+        return
+
+    worker_threads = max(1, threads // workers)
+    thread_vars = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+    previous = {name: os.environ.get(name) for name in thread_vars}
+    try:
+        for name in thread_vars:
+            os.environ[name] = str(worker_threads)
+        with ProcessPoolExecutor(
+            max_workers=workers, mp_context=get_context("spawn")
+        ) as pool:
+            futures = {
+                pool.submit(
+                    tasks.repair_batch_scores,
+                    data_dir=data_dir,
+                    repairs=batch,
+                    scorer_cfg=scorer_cfg,
+                    scratch_dir=scratch_dir / index,
+                    threads=worker_threads,
+                ): index
+                for index, batch in batches
+            }
+            for future in as_completed(futures):
+                future.result()
+                LOG.info("weekly score repair batch %s complete", futures[future])
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _collate_repaired_candidate_shards(
+    data_dir: Path,
+    shards: list[str],
+    scratch_dir: Path,
+    threads: int,
+    replacement_query_ids: set[str] | None = None,
+    source_query_ids: set[str] | None = None,
+) -> None:
+    workers = min(4, threads, len(shards))
+    if not workers:
+        return
+
+    def collate(shard: str) -> None:
+        tasks.collate_ligand_3d_candidates(
+            data_dir=data_dir,
+            shards=[shard],
+            scratch_dir=scratch_dir / shard,
+            threads=max(1, threads // workers),
+            replacement_query_ids=replacement_query_ids,
+            source_query_ids=source_query_ids,
+        )
+
+    if workers == 1:
+        for shard in shards:
+            collate(shard)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(collate, shards))
+
+
+def _completed_holo_query_repair(
+    data_dir: Path,
+    *,
+    affected_manifest: Path,
+    full_manifest: Path,
+    target_manifest: Path,
+) -> dict[str, Any] | None:
+    repair_manifest = data_dir / score.SCORE_REPAIR_RELATIVE
+    plan_path = repair_manifest.with_suffix(".json")
+    completion_path = data_dir / score.SCORE_REPAIR_DROP_RELATIVE.with_suffix(".json")
+    if not all(
+        path.is_file() for path in (repair_manifest, plan_path, completion_path)
+    ):
+        return None
+    plan = json.loads(plan_path.read_text())
+    completion = json.loads(completion_path.read_text())
+    expected = {
+        "affected_manifest": affected_manifest,
+        "additional_full_query_manifest": full_manifest,
+        "additional_target_query_manifest": target_manifest,
+        "output": repair_manifest,
+    }
+    if completion.get("status") != "complete" or any(
+        plan.get(key) != score._source_signature(path) for key, path in expected.items()
+    ):
+        return None
+    if completion_path.stat().st_mtime_ns < repair_manifest.stat().st_mtime_ns:
+        return None
+    return cast(dict[str, Any], plan)
 
 
 def repair_holo_scores(
@@ -627,6 +1275,7 @@ def repair_holo_scores(
     base_data_dir: Path,
     affected: set[str],
     full_alignment_queries: set[str],
+    targeted_alignment_queries: set[str],
     scorer_cfg: DictConfig,
     scratch_dir: Path,
     threads: int,
@@ -639,14 +1288,10 @@ def repair_holo_scores(
     holo_cfg = cast(
         DictConfig, OmegaConf.merge(scorer_cfg, {"sub_databases": ["holo"]})
     )
-    score.plan_score_batches(
-        data_dir,
-        batch_size=score_batch_size,
-        threads=threads,
-        scratch_dir=scratch_dir / "plan-scores",
-        max_query_protein_chains=int(scorer_cfg.max_query_protein_chains),
-        max_query_proper_ligand_chains=int(scorer_cfg.max_query_proper_ligand_chains),
-        reuse_mapped_alignments=True,
+    _restore_score_query_caches(
+        base_data_dir=base_data_dir,
+        data_dir=data_dir,
+        query_ids=targeted_alignment_queries,
     )
     affected_manifest = _write_pdb_manifest(
         data_dir / "manifests" / "weekly_affected_entries.parquet", affected
@@ -655,37 +1300,60 @@ def repair_holo_scores(
         data_dir / "manifests" / "weekly_full_score_queries.parquet",
         full_alignment_queries,
     )
-    try:
-        plan = score.plan_score_repair(
-            data_dir,
-            affected_manifest=affected_manifest,
-            additional_full_query_manifest=full_manifest,
-            batch_size=score_batch_size,
-            target_batch_size=score_batch_size,
-            threads=threads,
-            scratch_dir=scratch_dir / "plan-repair",
-            memory_limit=memory_limit,
-        )
-    except ValueError as exc:
-        if str(exc) != "no active score queries are affected by the repair":
-            raise
-        return {"status": "complete", "query_count": 0, "pair_count": 0}
-
-    repair_manifest = data_dir / score.SCORE_REPAIR_RELATIVE
-    repairs = pd.read_parquet(repair_manifest)
-    for batch_index, batch in repairs.groupby("repair_batch_index", sort=True):
-        tasks.repair_batch_scores(
-            data_dir=data_dir,
-            repairs=batch.to_dict("records"),
-            scorer_cfg=holo_cfg,
-            scratch_dir=scratch_dir / "queries" / str(batch_index),
-            threads=threads,
-        )
-    score.finalize_score_repair_queries(
-        data_dir,
-        repair_manifest=repair_manifest,
-        max_new_drops=0,
+    target_manifest = _write_pdb_manifest(
+        data_dir / "manifests" / "weekly_target_score_queries.parquet",
+        targeted_alignment_queries,
     )
+    repair_manifest = data_dir / score.SCORE_REPAIR_RELATIVE
+    plan = _completed_holo_query_repair(
+        data_dir,
+        affected_manifest=affected_manifest,
+        full_manifest=full_manifest,
+        target_manifest=target_manifest,
+    )
+    if plan is None:
+        score.plan_score_batches(
+            data_dir,
+            batch_size=score_batch_size,
+            threads=threads,
+            scratch_dir=scratch_dir / "plan-scores",
+            max_query_protein_chains=int(scorer_cfg.max_query_protein_chains),
+            max_query_proper_ligand_chains=int(
+                scorer_cfg.max_query_proper_ligand_chains
+            ),
+            reuse_mapped_alignments=True,
+        )
+        try:
+            plan = score.plan_score_repair(
+                data_dir,
+                affected_manifest=affected_manifest,
+                additional_full_query_manifest=full_manifest,
+                additional_target_query_manifest=target_manifest,
+                batch_size=score_batch_size,
+                target_batch_size=score_batch_size,
+                threads=threads,
+                scratch_dir=scratch_dir / "plan-repair",
+                memory_limit=memory_limit,
+            )
+        except ValueError as exc:
+            if str(exc) != "no active score queries are affected by the repair":
+                raise
+            return {"status": "complete", "query_count": 0, "pair_count": 0}
+        repairs = pd.read_parquet(repair_manifest)
+        _repair_score_batches(
+            data_dir,
+            repairs,
+            holo_cfg,
+            scratch_dir / "queries",
+            threads,
+        )
+        score.finalize_score_repair_queries(
+            data_dir,
+            repair_manifest=repair_manifest,
+            max_new_drops=0,
+        )
+    else:
+        repairs = pd.read_parquet(repair_manifest)
 
     replacement_queries = set(repairs["pdb_id"].astype(str))
     active_replacements = replacement_queries.intersection(
@@ -704,7 +1372,6 @@ def repair_holo_scores(
             / "scores"
             / "ligand_pair_score_shards"
             / f"shard={shard}.parquet",
-            base_data_dir / "scores" / "search_db=holo" / f"{shard}.parquet",
         ]
         if all(path.is_file() for path in base_files):
             existing_shards.append(shard)
@@ -716,20 +1383,20 @@ def repair_holo_scores(
         else:
             new_shards.append(shard)
     if existing_shards:
-        tasks.collate_ligand_3d_candidates(
-            data_dir=data_dir,
-            shards=existing_shards,
-            scratch_dir=scratch_dir / "candidate-shards",
-            threads=threads,
+        _collate_repaired_candidate_shards(
+            data_dir,
+            existing_shards,
+            scratch_dir / "candidate-shards",
+            threads,
             replacement_query_ids=replacement_queries,
             source_query_ids=active_replacements,
         )
     if new_shards:
-        tasks.collate_ligand_3d_candidates(
-            data_dir=data_dir,
-            shards=new_shards,
-            scratch_dir=scratch_dir / "candidate-shards",
-            threads=threads,
+        _collate_repaired_candidate_shards(
+            data_dir,
+            new_shards,
+            scratch_dir / "candidate-shards",
+            threads,
         )
     pair_cache_root = data_dir / "scores" / "ligand_3d_by_query"
     pair_cache_root.mkdir(exist_ok=True, parents=True)
@@ -743,7 +1410,7 @@ def repair_holo_scores(
     removed_shape_scores = _remove_affected_shape_scores(
         data_dir,
         shards=shards,
-        affected=affected,
+        affected=_changed_ligand_archive_entries(base_data_dir, data_dir, affected),
         scratch_dir=scratch_dir / "invalidate-ligand-3d",
         threads=threads,
     )
@@ -755,53 +1422,34 @@ def repair_holo_scores(
         scratch_dir=scratch_dir / "plan-ligand-3d",
         memory_limit=memory_limit,
     )
-    repair_pair_dir = data_dir / "scores" / "ligand_3d_pair_repairs"
-    for batch_index in range(int(ligand_plan["batch_count"])):
-        pairs = score._score_repair_ligand_3d_batch(
-            data_dir,
-            batch_index=batch_index,
-            batch_size=ligand_batch_size,
-        )
-        tasks.make_ligand_3d_scores(
+    if int(ligand_plan["pair_count"]):
+        repair_pair_dir = data_dir / "scores" / "ligand_3d_pair_repairs"
+        for batch_index in range(int(ligand_plan["batch_count"])):
+            pairs = score._score_repair_ligand_3d_batch(
+                data_dir,
+                batch_index=batch_index,
+                batch_size=ligand_batch_size,
+            )
+            tasks.make_ligand_3d_scores(
+                data_dir=data_dir,
+                pairs=pairs,
+                batch_index=batch_index,
+                scorer_cfg=holo_cfg,
+                force_update=False,
+                scratch_dir=scratch_dir / "ligand-3d" / str(batch_index),
+                threads=threads,
+                output_path=repair_pair_dir / f"{batch_index}.parquet",
+            )
+        score.merge_score_repair_ligand_3d(
             data_dir=data_dir,
-            pairs=pairs,
-            batch_index=batch_index,
-            scorer_cfg=holo_cfg,
-            force_update=False,
-            scratch_dir=scratch_dir / "ligand-3d" / str(batch_index),
+            shards=shards,
+            scratch_dir=scratch_dir / "merge-ligand-3d",
             threads=threads,
-            output_path=repair_pair_dir / f"{batch_index}.parquet",
-        )
-    score.merge_score_repair_ligand_3d(
-        data_dir,
-        shards=shards,
-        scratch_dir=scratch_dir / "merge-ligand-3d",
-        threads=threads,
-    )
-    if existing_shards:
-        tasks.merge_ligand_3d_scores(
-            data_dir=data_dir,
-            shards=existing_shards,
-            scorer_cfg=holo_cfg,
-            force_update=True,
-            scratch_dir=scratch_dir / "merge-score-shards",
-            threads=threads,
-            reuse_cached_pairs=True,
-            replacement_query_ids=replacement_queries,
-        )
-    if new_shards:
-        tasks.merge_ligand_3d_scores(
-            data_dir=data_dir,
-            shards=new_shards,
-            scorer_cfg=holo_cfg,
-            force_update=True,
-            scratch_dir=scratch_dir / "merge-score-shards",
-            threads=threads,
-            reuse_cached_pairs=True,
         )
     repair_report = score.finalize_score_repair_artifacts(
         data_dir,
         repair_manifest=repair_manifest,
+        require_packed_scores=False,
     )
     active_shards = {
         pdb_id[1:3] for pdb_id in score.published_scoring_query_ids(data_dir)
@@ -868,23 +1516,115 @@ def repair_non_holo_scores(
         search_db=search_db,
         pdb_ids=affected.difference(active),
     )
-    source_dir = data_dir / "dbs" / "subdbs" / f"search_db={search_db}"
     output = data_dir / "scores" / f"search_db={search_db}" / f"{search_db}.parquet"
-    if any(source_dir.glob("*.parquet")):
-        tasks.collate_partitions(
-            data_dir=data_dir,
-            partition=[search_db],
-            scratch_dir=scratch_dir / f"{search_db}-partition",
+    if search_db == "apo":
+        _merge_apo_scores(
+            data_dir,
+            output=output,
+            new_queries=queries,
+            replaced_queries=set(queries) | affected.difference(active),
+            scratch_dir=scratch_dir / "apo-partition",
             threads=threads,
             memory_limit=memory_limit,
         )
     else:
-        output.unlink(missing_ok=True)
+        source_dir = data_dir / "dbs" / "subdbs" / f"search_db={search_db}"
+        if any(source_dir.glob("*.parquet")):
+            tasks.collate_partitions(
+                data_dir=data_dir,
+                partition=[search_db],
+                scratch_dir=scratch_dir / f"{search_db}-partition",
+                threads=threads,
+                memory_limit=memory_limit,
+            )
+        else:
+            output.unlink(missing_ok=True)
     return {
         "status": "complete",
         "query_count": len(queries),
         "score_path": str(output),
     }
+
+
+def _merge_apo_scores(
+    data_dir: Path,
+    *,
+    output: Path,
+    new_queries: list[str],
+    replaced_queries: set[str],
+    scratch_dir: Path,
+    threads: int,
+    memory_limit: str,
+) -> None:
+    """Replace changed apo queries in the compact release score table."""
+    if not replaced_queries:
+        return
+    source_dir = data_dir / "dbs/subdbs/search_db=apo"
+    new_paths = [
+        source_dir / f"{pdb_id}.parquet"
+        for pdb_id in new_queries
+        if (source_dir / f"{pdb_id}.parquet").is_file()
+    ]
+    if not output.is_file() and not new_paths:
+        return
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    local_output = scratch_dir / "apo.parquet"
+    local_output.unlink(missing_ok=True)
+
+    def sql_path(path: Path) -> str:
+        return path.as_posix().replace("'", "''")
+
+    selects = []
+    if output.is_file():
+        selects.append(
+            f"""
+            SELECT old.* FROM read_parquet('{sql_path(output)}',
+                                           hive_partitioning=false) AS old
+            ANTI JOIN replaced_entries
+              ON split_part(old.query_system, '__', 1) = replaced_entries.pdb_id
+            """
+        )
+    if new_paths:
+        paths = ", ".join(f"'{sql_path(path)}'" for path in new_paths)
+        selects.append(
+            f"SELECT scores.*, 'apo'::VARCHAR AS search_db "
+            f"FROM read_parquet([{paths}], union_by_name=true, "
+            "hive_partitioning=false) AS scores"
+        )
+    with duckdb.connect() as connection:
+        connection.execute(f"SET threads={threads}")
+        connection.execute(f"SET memory_limit='{memory_limit}'")
+        connection.execute(f"SET temp_directory='{sql_path(scratch_dir)}'")
+        connection.execute("SET preserve_insertion_order=false")
+        connection.register(
+            "replaced_entries", pd.DataFrame({"pdb_id": sorted(replaced_queries)})
+        )
+        connection.execute(
+            f"""
+            COPY (
+                SELECT
+                    query_system::VARCHAR AS query_system,
+                    query_ligand_id::VARCHAR AS query_ligand_id,
+                    target_system::VARCHAR AS target_system,
+                    target_ligand_id::VARCHAR AS target_ligand_id,
+                    protein_mapping::VARCHAR AS protein_mapping,
+                    mapping::VARCHAR AS mapping,
+                    protein_mapper::VARCHAR AS protein_mapper,
+                    source::VARCHAR AS source,
+                    metric::VARCHAR AS metric,
+                    similarity::TINYINT AS similarity,
+                    search_db::VARCHAR AS search_db
+                FROM ({" UNION ALL BY NAME ".join(selects)})
+            ) TO '{sql_path(local_output)}' (
+                FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 500000
+            )
+            """
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    install = output.with_suffix(".parquet.tmp")
+    copyfile(local_output, install)
+    install.replace(output)
+    local_output.unlink(missing_ok=True)
 
 
 def repair_apo_scores(
@@ -935,9 +1675,15 @@ def repair_interface_scores(
     """Replace interface rows for changed searches and retain other query rows."""
     plan = score.plan_interface_scoring(data_dir, batch_size=1)
     work = pd.read_parquet(data_dir / score.INTERFACE_SCORE_WORK_RELATIVE)
-    representatives = pd.read_parquet(
-        data_dir / tasks.INTERFACE_REPRESENTATIVES_RELATIVE,
-        columns=["entry_pdb_id"],
+    replacements = affected | full_alignment_queries
+    representatives = (
+        pq.read_table(
+            data_dir / tasks.INTERFACE_REPRESENTATIVES_RELATIVE,
+            columns=["entry_pdb_id"],
+            filters=[("entry_pdb_id", "in", sorted(replacements))],
+        )
+        .column("entry_pdb_id")
+        .to_pylist()
     )
     planned_queries = set(
         pd.read_parquet(data_dir / score.MANIFEST_RELATIVE, columns=["pdb_id"])[
@@ -948,11 +1694,7 @@ def repair_interface_scores(
         (data_dir / "alignments" / "manifest.json").read_text()
     )
     skipped_queries = set(map(str, alignment_report.get("skipped_queries", {})))
-    current_queries = (
-        set(representatives["entry_pdb_id"].astype(str))
-        & planned_queries - skipped_queries
-    )
-    replacements = affected | full_alignment_queries
+    current_queries = set(map(str, representatives)) & planned_queries - skipped_queries
     active_replacements = replacements.intersection(current_queries)
     repair_root = data_dir / "interface_score_repairs" / "weekly"
     repair_paths: dict[str, Path] = {}
@@ -984,6 +1726,8 @@ def repair_interface_scores(
         output = score_root / f"shard={shard}.parquet"
         repair_path = repair_paths.get(shard)
         removed = sorted(pdb_id for pdb_id in replacements if pdb_id[1:3] == shard)
+        if not removed and repair_path is None:
+            continue
         local_root = scratch_dir / "interface-merge" / shard
         local_root.mkdir(parents=True, exist_ok=True)
         local_output = local_root / output.name
@@ -1405,6 +2149,39 @@ def refresh_ligand_chemistry(
     }
 
 
+def _ligand_chemistry_unchanged(base: Path, data_dir: Path, affected: set[str]) -> bool:
+    """Check whether changed entries retain the same proper ligands and SMILES."""
+    columns = [
+        "entry_pdb_id",
+        "ligand_id",
+        "ligand_smiles",
+        "ligand_is_proper",
+        "system_type",
+    ]
+
+    def ligands(path: Path) -> set[tuple[str, str, str]]:
+        rows = pd.read_parquet(
+            path,
+            columns=columns,
+            filters=[("entry_pdb_id", "in", sorted(affected))],
+        )
+        rows = rows[
+            rows["ligand_is_proper"].fillna(False) & rows["system_type"].eq("holo")
+        ]
+        return set(
+            zip(
+                rows["entry_pdb_id"].astype(str),
+                rows["ligand_id"].astype(str),
+                rows["ligand_smiles"].astype(str),
+                strict=True,
+            )
+        )
+
+    return ligands(base / RELEASE_PATHS["annotation_table"]) == ligands(
+        data_dir / RELEASE_PATHS["annotation_table"]
+    )
+
+
 def refresh_ligand_score_export(
     data_dir: Path,
     *,
@@ -1416,7 +2193,7 @@ def refresh_ligand_score_export(
     shards = sorted(
         {pdb_id[1:3] for pdb_id in score.published_scoring_query_ids(data_dir)}
     )
-    shard_dir = data_dir / "exports" / "ligand_similarity_score_shards"
+    shard_dir = data_dir / "exports" / "ligand_similarity_scores"
     active_shards = set(shards)
     for path in shard_dir.glob("*.parquet"):
         if path.stem not in active_shards:
@@ -1438,6 +2215,20 @@ def refresh_ligand_score_export(
         threads=threads,
         memory_limit=memory_limit,
     )
+
+
+def _isolated_ligand_score_export(
+    data_dir: Path, *, scratch_dir: Path, threads: int, memory_limit: str
+) -> dict[str, Any]:
+    """Release the large export's memory before continuing the update."""
+    with ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn")) as pool:
+        return pool.submit(
+            refresh_ligand_score_export,
+            data_dir,
+            scratch_dir=scratch_dir,
+            threads=threads,
+            memory_limit=memory_limit,
+        ).result()
 
 
 def rebuild_similarity_covers(
@@ -1595,6 +2386,22 @@ def _finish_stage(
     write_json_atomic(path, report)
 
 
+def _rebase_reused_scoring_artifacts(data_dir: Path, report: dict[str, Any]) -> None:
+    """Keep unchanged scoring artifacts valid after entry tables are rewritten."""
+    if not report.get("search_inputs", {}).get("reused_base"):
+        return
+    lookup = data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE
+    manifest = read_json_cache(
+        data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_MANIFEST_RELATIVE
+    )
+    if manifest is None or manifest.get("output") != (
+        tasks._interface_representative_output_signature(lookup)
+    ):
+        raise ValueError("reused alignment lookup changed during the weekly update")
+    tasks._refresh_representative_source_manifests(data_dir)
+    tasks._write_alignment_chain_lookup_manifest(data_dir)
+
+
 def apply_release_update(
     plan_dir: Path,
     workspace: Path,
@@ -1618,12 +2425,20 @@ def apply_release_update(
     state_path = workspace.resolve() / "weekly_update.json"
     report = _read_weekly_report(state_path, inputs=inputs)
     if report is not None and report["status"] in {"complete", "finalizing"}:
+        if report.get("search_inputs", {}).get("reused_base"):
+            planned = json.loads((plan_dir / "plan.json").read_text())
+            _refresh_foldseek_source_manifest(
+                workspace,
+                nextgen_root=Path(planned["nextgen_root"]),
+                affected=set(report["affected_pdb_ids"]),
+            )
         marker_path = workspace / "index" / "collation.json"
         marker = json.loads(marker_path.read_text())
         if marker.get("status") != "complete":
             if report["status"] == "complete":
                 raise ValueError("completed weekly update has an incomplete index")
         else:
+            _rebase_reused_scoring_artifacts(workspace, report)
             if report["status"] == "finalizing":
                 _finish_stage(
                     state_path,
@@ -1683,6 +2498,37 @@ def apply_release_update(
     else:
         workspace = workspace.resolve(strict=True)
 
+    _refresh_foldseek_source_manifest(
+        workspace,
+        nextgen_root=Path(plan["nextgen_root"]),
+        affected=affected,
+    )
+    unchanged_scoring = _unchanged_scoring_entries(base, workspace, affected)
+    scoring_affected = affected - unchanged_scoring
+    report["unchanged_scoring_entries"] = sorted(unchanged_scoring)
+    write_json_atomic(state_path, report)
+    if not scoring_affected and set(report["completed_stages"]) == {
+        "entries_and_archives"
+    }:
+        _finish_stage(state_path, report, "search_inputs", {"reused_base": True})
+        _finish_stage(
+            state_path,
+            report,
+            "alignments",
+            {"full_queries": {search_db: [] for search_db in alignment_databases}},
+        )
+        _finish_stage(state_path, report, "scores", {"reused_base": True})
+        _finish_stage(state_path, report, "ligand_chemistry", {"reused_base": True})
+        _finish_stage(
+            state_path,
+            report,
+            "cluster_assignments",
+            {
+                "ligand": str(workspace / "index/ligand_clusters.parquet"),
+                "interface": str(workspace / "index/interface_clusters.parquet"),
+            },
+        )
+
     completed = set(report["completed_stages"])
     if "search_inputs" not in completed:
         lookup = tasks.make_alignment_chain_lookup(
@@ -1694,48 +2540,47 @@ def apply_release_update(
         protein_plan = score.plan_protein_scoring(
             workspace, max_seqs=int(cfg.foldseek.max_seqs)
         )
-        sequence_clusters = protein_clusters.make_protein_sequence_clusters(
-            data_dir=workspace,
-            scratch_dir=scratch_dir / "protein-sequence-clusters",
-            threads=threads,
-            identity=float(cfg.flow.protein_sequence_cluster_identity),
-            coverage=float(cfg.flow.protein_cluster_coverage),
-        )
-        structure_clusters = protein_clusters.make_protein_structure_clusters(
-            data_dir=workspace,
-            cif_root=Path(plan["nextgen_root"]) / "data/entries/divided",
-            scratch_dir=scratch_dir / "protein-structure-clusters",
-            threads=threads,
-            lddt=float(cfg.flow.protein_structure_cluster_lddt),
-            coverage=float(cfg.flow.protein_cluster_coverage),
-        )
         if pdb_search_databases:
-            foldseek_input = score.make_foldseek_input_manifest(
+            score.make_foldseek_input_manifest(
                 workspace, Path(plan["nextgen_root"]) / "data/entries/divided"
             )
-            mmseqs_input = score.make_mmseqs_input_fasta(workspace)
-            tasks.make_dbs(
-                data_dir=workspace,
-                sub_databases=pdb_search_databases,
-                cpu=threads,
-                cif_root=foldseek_input,
-                seqres_path=mmseqs_input,
-                scratch_dir=scratch_dir / "databases",
-                build_dir=scratch_dir / "database-build",
-                index=False,
-            )
-            tasks.make_sub_dbs(
-                data_dir=workspace,
-                sub_databases=pdb_search_databases,
-                cpu=threads,
-                scratch_dir=scratch_dir / "exact-search-dbs",
-            )
+            score.make_mmseqs_input_fasta(workspace)
+        shadowed = _prepare_weekly_search_overlay(
+            base=base,
+            data_dir=workspace,
+            affected=scoring_affected,
+            nextgen_root=Path(plan["nextgen_root"]),
+            search_databases=[db for db in alignment_databases if db != "pred"],
+            scratch_dir=scratch_dir / "weekly-search-overlay",
+            threads=threads,
+        )
+        sequence_clusters = extend_protein_clusters(
+            base=base,
+            data_dir=workspace,
+            affected=scoring_affected,
+            backend="mmseqs",
+            scratch_dir=scratch_dir / "protein-sequence-clusters",
+            threads=threads,
+            threshold=float(cfg.flow.protein_sequence_cluster_identity),
+            coverage=float(cfg.flow.protein_cluster_coverage),
+        )
+        structure_clusters = extend_protein_clusters(
+            base=base,
+            data_dir=workspace,
+            affected=scoring_affected,
+            backend="foldseek",
+            scratch_dir=scratch_dir / "protein-structure-clusters",
+            threads=threads,
+            threshold=float(cfg.flow.protein_structure_cluster_lddt),
+            coverage=float(cfg.flow.protein_cluster_coverage),
+        )
         search_details: dict[str, Any] = {
             "alignment_chain_lookup": str(lookup),
             "protein_plan": protein_plan,
             "protein_sequence_clusters": str(sequence_clusters),
             "protein_structure_clusters": str(structure_clusters),
             "search_databases": search_databases,
+            "shadowed_entries": len(shadowed),
         }
         if "apo" in search_databases:
             search_details["apo_plan"] = score.plan_linked_apo_scoring(
@@ -1753,7 +2598,7 @@ def apply_release_update(
         planned_queries = _load_or_plan_alignment_repairs(
             workspace,
             search_databases=alignment_databases,
-            affected=affected,
+            affected=scoring_affected,
             scorer_cfg=cfg.scorer,
             foldseek_cfg=cfg.foldseek,
             mmseqs_cfg=cfg.mmseqs,
@@ -1768,8 +2613,9 @@ def apply_release_update(
                 repair_alignments(
                     workspace,
                     search_db=search_db,
-                    affected=affected,
-                    full_queries=planned_queries[search_db],
+                    affected=scoring_affected,
+                    full_queries=planned_queries[search_db] & scoring_affected,
+                    targeted_queries=planned_queries[search_db] - scoring_affected,
                     scorer_cfg=cfg.scorer,
                     foldseek_cfg=cfg.foldseek,
                     mmseqs_cfg=cfg.mmseqs,
@@ -1801,8 +2647,11 @@ def apply_release_update(
             score_details["ligand"] = repair_holo_scores(
                 workspace,
                 base_data_dir=base,
-                affected=affected,
+                affected=scoring_affected,
                 full_alignment_queries=full_query_sets["holo"],
+                targeted_alignment_queries=set(
+                    map(str, report["alignment_repair_queries"]["holo"])
+                ).difference(scoring_affected),
                 scorer_cfg=cfg.scorer,
                 scratch_dir=scratch_dir / "holo-score-repair",
                 threads=threads,
@@ -1810,25 +2659,25 @@ def apply_release_update(
                 score_batch_size=int(cfg.flow.make_batch_scores_batch_size),
                 ligand_batch_size=int(cfg.flow.make_ligand_3d_scores_batch_size),
             )
-            score_details["interface"] = repair_interface_scores(
-                workspace,
-                affected=affected,
-                full_alignment_queries=full_query_sets["holo"],
-                scratch_dir=scratch_dir / "interface-score-repair",
-                threads=threads,
-                memory_limit=memory_limit,
-            )
-            score_details["ligand_export"] = refresh_ligand_score_export(
-                workspace,
-                scratch_dir=scratch_dir / "ligand-score-export",
-                threads=threads,
-                memory_limit=memory_limit,
+            score_details["interface"] = (
+                repair_interface_scores(
+                    workspace,
+                    affected=scoring_affected,
+                    full_alignment_queries=full_query_sets["holo"],
+                    scratch_dir=scratch_dir / "interface-score-repair",
+                    threads=threads,
+                    memory_limit=memory_limit,
+                )
+                if _entries_with_interfaces(base, workspace, scoring_affected)
+                else {"reused_base": True}
             )
         if "apo" in search_databases:
             score_details["apo"] = repair_apo_scores(
                 workspace,
-                affected=affected,
-                full_alignment_queries=full_query_sets["apo"],
+                affected=scoring_affected,
+                full_alignment_queries=set(
+                    map(str, report["alignment_repair_queries"]["apo"])
+                ),
                 scorer_cfg=cfg.scorer,
                 scratch_dir=scratch_dir / "apo-score-repair",
                 threads=threads,
@@ -1838,10 +2687,17 @@ def apply_release_update(
             score_details["pred"] = repair_non_holo_scores(
                 workspace,
                 search_db="pred",
-                affected=affected,
+                affected=scoring_affected,
                 full_alignment_queries=full_query_sets["pred"],
                 scorer_cfg=cfg.scorer,
                 scratch_dir=scratch_dir / "pred-score-repair",
+                threads=threads,
+                memory_limit=memory_limit,
+            )
+        if "holo" in search_databases:
+            score_details["ligand_export"] = _isolated_ligand_score_export(
+                workspace,
+                scratch_dir=scratch_dir / "ligand-score-export",
                 threads=threads,
                 memory_limit=memory_limit,
             )
@@ -1854,28 +2710,63 @@ def apply_release_update(
 
     completed = set(report["completed_stages"])
     if "ligand_chemistry" not in completed:
-        chemistry = refresh_ligand_chemistry(
-            workspace,
-            cfg=cfg,
-            scratch_dir=scratch_dir / "ligand-chemistry",
-            threads=threads,
-        )
+        if _ligand_chemistry_unchanged(base, workspace, scoring_affected):
+            chemistry = {"reused_base": True}
+        else:
+            chemistry = refresh_ligand_chemistry(
+                workspace,
+                cfg=cfg,
+                scratch_dir=scratch_dir / "ligand-chemistry",
+                threads=threads,
+            )
         _finish_stage(state_path, report, "ligand_chemistry", chemistry)
+    if report["ligand_chemistry"].get("reused_base"):
+        for name in (
+            "ligands_per_smiles.parquet",
+            get_similarity_scores.MHFP6_FINGERPRINT_FILE,
+            "ligand_similarity_annotations.parquet",
+        ):
+            source = base / "fingerprints" / name
+            destination = workspace / "fingerprints" / name
+            if source.is_file() and not destination.is_file():
+                link_or_copy_file(source, destination)
 
     completed = set(report["completed_stages"])
-    if "similarity_covers" not in completed:
-        covers = rebuild_similarity_covers(
-            workspace,
-            cfg=cfg,
-            scratch_dir=scratch_dir / "similarity-covers",
-            threads=threads,
+    if "cluster_assignments" not in completed:
+        staged = workspace / "index/.staging/weekly_clusters"
+        staged.mkdir(parents=True, exist_ok=True)
+        ligand_path = staged / "ligand.parquet"
+        interface_path = staged / "interface.parquet"
+        extend_ligand_clusters(
+            base=base, data_dir=workspace, affected=scoring_affected
+        ).to_parquet(ligand_path, index=False)
+        if (workspace / "index/interface_annotation_table.parquet").is_file():
+            extend_interface_clusters(
+                base=base, data_dir=workspace, affected=scoring_affected
+            ).to_parquet(interface_path, index=False)
+        _finish_stage(
+            state_path,
+            report,
+            "cluster_assignments",
+            {"ligand": str(ligand_path), "interface": str(interface_path)},
         )
-        _finish_stage(state_path, report, "similarity_covers", covers)
 
     if "final_tables" not in set(report["completed_stages"]):
         report["status"] = "finalizing"
         write_json_atomic(state_path, report)
-        tasks.finalize_index(data_dir=workspace)
+        staged = report["cluster_assignments"]
+        interface_path = Path(staged["interface"])
+        has_interfaces = (
+            workspace / "index/interface_annotation_table.parquet"
+        ).is_file()
+        if has_interfaces and not interface_path.is_file():
+            raise FileNotFoundError(interface_path)
+        tasks.finalize_index(
+            data_dir=workspace,
+            weekly_ligand_clusters=Path(staged["ligand"]),
+            weekly_interface_clusters=interface_path if has_interfaces else None,
+        )
+        _rebase_reused_scoring_artifacts(workspace, report)
         marker_path = workspace / "index" / "collation.json"
         marker = json.loads(marker_path.read_text())
         if marker.get("status") != "complete":
