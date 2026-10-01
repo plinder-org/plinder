@@ -56,10 +56,12 @@ jobs:
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
-      - name: Install Python requirements
-        run: |
-          pip install -r requirements_data.txt
-          pip install -e ".[data,test,eval,plots]"
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install plinder
+        run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --locked --inexact
       - name: Run tests
         env:
           PLINDER_OFFLINE: "true"

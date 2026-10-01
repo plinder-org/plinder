@@ -87,21 +87,26 @@ docs = [
     "matplotlib",
 ]
 
-# Not published to PyPI; installed by default with `uv sync`.
-# Mirrors requirements_data.txt, which remains for pip-based installs.
+# Not published to PyPI (includes git-only packages); installed by default with
+# `uv sync`. This is the complete development and CI environment.
 [dependency-groups]
 dev = [
-    "plinder[dev,eval,loader]",
+    "plinder[dev,eval,loader,plots]",
     "networkit>11.0",
     "tabulate",
     "pdb-validation",
     "mmpdb",
+    "semver",
 ]
 
 [tool.uv.sources]
 pdb-validation = { git = "https://git.scicore.unibas.ch/schwede/ligand-validation.git" }
 mmpdb = { git = "https://github.com/rdkit/mmpdb.git" }
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[tool.uv]
+# networkit source builds need CMake; require a published wheel.
+no-build-package = ["networkit"]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

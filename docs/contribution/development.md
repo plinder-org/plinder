@@ -16,8 +16,8 @@ $ git clone https://github.com/plinder-org/plinder.git
 
 ### Creating the Conda environment
 
-The data generation pipeline (`plinder.data`) requires a few tools that are only
-available via _Conda_ (mmseqs2, foldseek, reduce).
+The data generation pipeline (`plinder.data`) and evaluation require a few tools
+that are only available via _Conda_ (mmseqs2, foldseek, OpenStructure).
 If you have not _Conda_ installed yet, we recommend its installation via
 [miniforge](https://github.com/conda-forge/miniforge).
 
@@ -28,18 +28,19 @@ $ mamba activate plinder
 
 ### Installing `plinder`
 
-With [uv](https://docs.astral.sh/uv/), a single command installs `plinder` in
-editable mode with the `dev`, `eval` and `loader` extras and the data pipeline
-dependencies from `requirements_data.txt`:
+All Python dependencies are declared in `pyproject.toml` and locked in `uv.lock`.
+With [uv](https://docs.astral.sh/uv/), install `plinder` in editable mode with the
+complete `dev` dependency group (all extras used in CI, including CPU-only pytorch
+on Linux and the git-only pipeline packages) into the active Conda environment:
 
 ```console
-$ uv sync
+$ UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --inexact
 ```
 
-No separate `pip install -r requirements_data.txt` step is needed.
-The Conda-only tools above are still required.
+CI runs the same command with `--locked`. Without the Conda environment, a plain `uv sync`
+installs into `.venv`; tests that need the Conda-only tools will then fail.
 
-With pip, the base install covers data generation and the core library (numpy 2 compatible):
+With pip, the base install covers data generation and the core library:
 
 ```console
 $ pip install -e ".[dev]"
@@ -62,14 +63,8 @@ is installed by `mamba env create -f environment.yml` above.
 Data generation (`plinder.data`) does **not** require OpenStructure and
 works with numpy 2.
 
-For the full data pipeline, pip installs need additional dependencies
-(`uv sync` already includes them):
-
-```console
-$ pip install -r requirements_data.txt
-```
-
-This includes Linux pytorch (for the loader) and pipeline-specific tools.
+The full data pipeline also needs the git-only packages in the `dev`
+dependency group, which only `uv sync` installs.
 :::
 
 ### Enabling Pre-commit hooks

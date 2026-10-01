@@ -30,10 +30,12 @@ jobs:
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
-      - name: Install Python requirements
-        run: |
-          pip install build semver -r requirements_data.txt
-          pip install -e ".[data,test,eval,plots]"
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install plinder
+        run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --locked --inexact
       - name: Get version bump
         id: get-tag
         run: echo "bump=$(python flows/version.py)" >> $GITHUB_OUTPUT
@@ -46,7 +48,7 @@ jobs:
         if: steps.get-tag.outputs.bump != ''
         run: git tag ${{ steps.get-tag.outputs.bump }}
       - name: Build distribution
-        run: python -m build
+        run: uv build
       - name: Publish package distributions to PyPI
         if: steps.get-tag.outputs.bump != ''
         uses: pypa/gh-action-pypi-publish@release/v1
