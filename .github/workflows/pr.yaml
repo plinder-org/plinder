@@ -97,3 +97,6 @@ jobs:
         run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --locked --inexact --extra docs
       - name: Build the documentation
         run: sphinx-build --fail-on-warning docs build/docs
+      - name: Show notebook errors
+        if: failure()
+        run: cat build/docs/reports/examples/*.err.log 2>/dev/null || true
