@@ -436,7 +436,9 @@ def test_annotation_binding_affinity_columns_join_from_sidecar(
         columns=["ligand_id", "ligand_binding_affinity_endpoint"],
         release=local_release,
     )
-    assert joined["ligand_binding_affinity_endpoint"].tolist() == [None, "Kd"]
+    endpoints = joined["ligand_binding_affinity_endpoint"]
+    assert endpoints.isna().tolist() == [True, False]
+    assert endpoints.iloc[1] == "Kd"
 
 
 def test_query_table_uses_bound_filter_parameters(
