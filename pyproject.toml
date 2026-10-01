@@ -5,7 +5,7 @@ dependencies = [
     "biotite >= 1.2",
     "numpy",
     "threadpoolctl>=3.6",
-    "pandas",
+    "pandas<3",
     "pydantic",
     "tqdm",
     "peppr>=0.13",
