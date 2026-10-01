@@ -89,7 +89,11 @@ jobs:
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
-      - name: Install Python requirements
-        run: pip install six ".[docs,loader]"
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install plinder
+        run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --locked --inexact --extra docs
       - name: Build the documentation
         run: sphinx-build --fail-on-warning docs build/docs
