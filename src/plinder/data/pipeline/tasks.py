@@ -2513,6 +2513,22 @@ def alignment_mapping_shard_is_current(
     return True
 
 
+def _restore_parquet_schema(path: Path, schema: pa.Schema) -> None:
+    """Cast a DuckDB-written file back to the shard's original physical types.
+
+    DuckDB always writes text as ``string``, while pandas 3 writes ``large_string``;
+    the values are identical, so only the physical type is restored.
+    """
+    written = pq.read_schema(path)
+    if written.equals(schema) or written.names != schema.names:
+        return
+    restored = path.with_suffix(path.suffix + ".restored")
+    with pq.ParquetWriter(restored, schema, compression="zstd") as writer:
+        for batch in pq.ParquetFile(path).iter_batches():
+            writer.write_batch(batch.cast(schema))
+    restored.replace(path)
+
+
 def _replace_release_alignment_queries(
     *,
     old: Path,
@@ -2582,6 +2598,7 @@ def _replace_release_alignment_queries(
         )
     finally:
         connection.close()
+    _restore_parquet_schema(temporary, old_schema)
     if not pq.read_schema(temporary).equals(old_schema):
         raise ValueError(
             f"patched alignment shard has an unexpected schema: {old}; "
