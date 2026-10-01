@@ -80,6 +80,10 @@ RELEASE_PATHS = {
     "search_database_overlay": "search_databases/weekly_delta/holo_{backend}",
     "search_database_shadowed_entries": "search_databases/shadowed_entries.parquet",
     "protein_similarity_scores": "exports/protein_similarity_scores",
+    "protein_similarity_score_shard": (
+        "exports/protein_similarity_scores/alignment_type={alignment_type}/"
+        "shard={shard}.parquet"
+    ),
     "ligand_similarity_scores": "exports/ligand_similarity_scores.parquet",
     "interface_similarity_scores": "exports/interface_similarity_scores.parquet",
     "interface_half_similarity_scores": (

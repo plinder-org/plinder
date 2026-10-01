@@ -65,6 +65,30 @@ def test_prefetch_accepts_one_available_alignment_backend(tmp_path):
     assert paths == {"1abc": {"foldseek": foldseek}}
 
 
+def test_prefetch_fetches_protein_score_shards_when_requested(tmp_path, monkeypatch):
+    requested: list[str] = []
+
+    def get_plinder_path(*, rel: str) -> Path:
+        requested.append(rel)
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        return path
+
+    monkeypatch.setattr(release.cpl, "get_plinder_path", get_plinder_path)
+
+    reconstruct.prefetch_similarity_alignments(
+        ["1abc__1__1.A__1.L"], include_protein_scores=True
+    )
+
+    assert requested == [
+        "alignment_cigars/search_db=holo/alignment_type=foldseek/shard=ab.parquet",
+        "exports/protein_similarity_scores/alignment_type=foldseek/shard=ab.parquet",
+        "alignment_cigars/search_db=holo/alignment_type=mmseqs/shard=ab.parquet",
+        "exports/protein_similarity_scores/alignment_type=mmseqs/shard=ab.parquet",
+    ]
+
+
 def test_canonical_ligand_resolver_materializes_only_requested_member(tmp_path):
     archive = tmp_path / "ligand_archives" / "ab.parquet"
     archive.parent.mkdir(parents=True)
