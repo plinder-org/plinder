@@ -711,6 +711,89 @@ def test_interface_side_clusters_use_independent_side_nodes(tmp_path):
     assert edges.loc[("i1::side=1", "i2::side=2"), "similarity"] == pytest.approx(60.0)
 
 
+def test_interface_clusters_prefer_compact_similarity_tables(tmp_path):
+    from plinder.data.clusters import (
+        prepare_component_node_universe,
+        prepare_symmetric_edge_plan,
+        write_symmetric_edge_fragment_batch,
+        write_symmetric_edge_shard,
+    )
+
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    pd.DataFrame({"system_id": ["i1", "i2"]}).to_parquet(
+        index_dir / "interface_annotation_table.parquet", index=False
+    )
+    _write_interface_cluster_universe(index_dir, ["i1", "i2"])
+    raw_dir = tmp_path / "interface_scores"
+    raw_dir.mkdir()
+    pd.DataFrame(
+        {
+            "query_system": ["i1"],
+            "target_system": ["i2"],
+            "metric": ["interface_qcov"],
+            "similarity": [5],
+        }
+    ).to_parquet(raw_dir / "shard=ab.parquet", index=False)
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "query_system": ["i1", "i1", "i2"],
+            "target_system": ["i2", "i2", "i1"],
+            "similarity": [80, 75, 60],
+        }
+    ).to_parquet(exports / "interface_similarity_scores.parquet", index=False)
+    pd.DataFrame(
+        {
+            "query_half_interface_id": ["i1::side=1", "i2::side=2"],
+            "target_half_interface_id": ["i2::side=2", "i1::side=1"],
+            "similarity": [90, 70],
+        }
+    ).to_parquet(exports / "interface_half_similarity_scores.parquet", index=False)
+
+    prepare_component_node_universe(tmp_path, entity_type="interface")
+    plan = prepare_symmetric_edge_plan(
+        data_dir=tmp_path,
+        metrics=["interface_qcov", "interface_side_qcov"],
+        source_batch_size=1,
+        bucket_count=1,
+        entity_type="interface",
+    )
+    assert {batch["kind"] for batch in plan["batches"]} == {
+        "interface_export_interface_qcov",
+        "interface_export_interface_side_qcov",
+    }
+    for batch in plan["batches"]:
+        write_symmetric_edge_fragment_batch(
+            data_dir=tmp_path,
+            batch=batch,
+            scratch_dir=tmp_path / "scratch-fragments" / batch["key"],
+            threads=1,
+            entity_type="interface",
+        )
+    for metric, pair, expected in (
+        ("interface_qcov", ("i1", "i2"), 60.0),
+        ("interface_side_qcov", ("i1::side=1", "i2::side=2"), 70.0),
+    ):
+        write_symmetric_edge_shard(
+            data_dir=tmp_path,
+            metric=metric,
+            bucket=0,
+            scratch_dir=tmp_path / "scratch-shards" / metric,
+            threads=1,
+            entity_type="interface",
+        )
+        edges = pd.read_parquet(
+            tmp_path
+            / "interface_clusters/symmetric_edges"
+            / f"metric={metric}/bucket=000.parquet"
+        ).set_index(["query_node", "target_node"])
+        assert edges.loc[pair, "similarity"] == pytest.approx(expected)
+        if metric == "interface_qcov":
+            assert edges.loc[pair, "forward_similarity"] == pytest.approx(80.0)
+
+
 def test_empty_interface_universe_publishes_typed_empty_cover(tmp_path):
     from plinder.data.clusters import (
         make_directed_cover_component_reduction,
