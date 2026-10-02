@@ -28,7 +28,7 @@ $ mamba activate plinder
 
 ### Installing `plinder`
 
-All Python dependencies are declared in `pyproject.toml` and locked in `uv.lock`.
+All Python dependencies are declared in `pyproject.toml`.
 With [uv](https://docs.astral.sh/uv/), install `plinder` in editable mode with the
 complete `dev` dependency group (all extras used in CI, including CPU-only pytorch
 on Linux and the git-only pipeline packages) into the active Conda environment:
@@ -37,7 +37,7 @@ on Linux and the git-only pipeline packages) into the active Conda environment:
 $ UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --inexact
 ```
 
-CI runs the same command with `--locked`. Without the Conda environment, a plain `uv sync`
+CI runs the same command. Without the Conda environment, a plain `uv sync`
 installs into `.venv`; tests that need the Conda-only tools will then fail.
 
 With pip, the base install covers data generation and the core library:
