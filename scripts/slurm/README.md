@@ -619,3 +619,24 @@ the validated alignment shards under
 `alignment_cigars/search_db=holo/alignment_type=*/shard=*.parquet`. Per-PDB raw
 search files and the other derived score datasets are generation intermediates;
 mapped per-PDB files exist only transiently on node-local scratch.
+
+## Separate the public release from working data
+
+Keep the completed ingest as the working directory. Build a sibling directory
+containing only the files used by the release API:
+
+```bash
+python -m plinder.data.pipeline.public_release \
+  /path/to/ingest_2026-09 /path/to/PLINDER-2026-09
+```
+
+The public directory includes the index tables, similarity tables, cover tables,
+ligand archives and scores, alignment CIGARs, and MMseqs/Foldseek search databases.
+It excludes raw alignments, score caches, scratch files, STEAM databases, and JSON
+files containing local paths. By default the files are hard-linked, so this adds
+almost no data storage but is not an independent copy: do not edit either tree's
+files in place. Pass `--copy` for an independent copy. After a working-release
+repair, rerun with `--replace` to refresh the public tree.
+
+Upload the public directory, not the working ingest. The Foldseek databases
+contain internal symlinks, so use `--no-ignore-symlinks` when syncing to GCS.

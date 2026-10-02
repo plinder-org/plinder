@@ -32,6 +32,7 @@ Issues = "https://github.com/plinder-org/plinder/issues"
 [project.scripts]
 plinder_download = "plinder.core.index.utils:download_plinder_cmd"
 plinder_eval = "plinder.eval.cli:main"
+plinder_prepare_release = "plinder.data.pipeline.public_release:main"
 
 [project.optional-dependencies]
 data = ["google-cloud-storage", "gcsfs", "numba"]
