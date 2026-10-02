@@ -39,7 +39,7 @@ jobs:
           enable-cache: true
       - name: Install plinder
         shell: bash -el {0}
-        run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --locked --inexact --extra docs
+        run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --inexact --extra docs
       - name: Build docs
         shell: bash -el {0}
         id: build
