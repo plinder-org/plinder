@@ -38,7 +38,7 @@ jobs:
         run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --inexact
       - name: Get version bump
         id: get-tag
-        run: echo "bump=$(python flows/version.py)" >> $GITHUB_OUTPUT
+        run: echo "bump=$(python version.py)" >> $GITHUB_OUTPUT
       - name: Run tests
         if: steps.get-tag.outputs.bump != ''
         env:
