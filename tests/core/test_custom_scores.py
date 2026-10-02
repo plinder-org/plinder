@@ -90,6 +90,33 @@ def test_custom_chain_similarity_scores_keep_each_alignment(tmp_path):
     assert pd.read_parquet(empty_output).empty
 
 
+def test_custom_chain_similarity_scores_round_half_up(tmp_path):
+    hits = tmp_path / "hits.parquet"
+    pd.DataFrame(
+        {
+            "query_id": ["model"],
+            "query_chain_id": ["model__A"],
+            "structure_id": ["model"],
+            "query_chain_asym_id": ["A"],
+            "target_entry": ["1abc"],
+            "target_chain_asym_id": ["B"],
+            "source": ["mmseqs"],
+            "qcov": [0.625],
+            "tcov": [0.125],
+            "fident": [0.125],
+            "qaln": ["ACDE"],
+            "taln": ["ACDF"],
+        }
+    ).to_parquet(hits, index=False)
+
+    output = custom.write_custom_chain_similarity_scores(
+        {"mmseqs": hits}, output_path=tmp_path / "scores.parquet"
+    )
+
+    scores = pd.read_parquet(output)
+    assert scores.loc[0, ["qcov", "tcov", "fident"]].tolist() == [63, 13, 13]
+
+
 def _write_database_prefix(prefix: Path, *, indexed: bool = False) -> None:
     prefix.parent.mkdir(parents=True, exist_ok=True)
     prefix.with_suffix(".dbtype").write_bytes(b"db")

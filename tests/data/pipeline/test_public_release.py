@@ -1,10 +1,12 @@
 from pathlib import Path
 
 import pytest
+
 from plinder.core.release import RELEASE_PATHS
 from plinder.data.pipeline.public_release import (
     _FILE_ARTIFACTS,
     _PARQUET_DIRECTORIES,
+    _SAMPLING_DIRECTORIES,
     _SEARCH_DATABASES,
     prepare_public_release,
 )
@@ -20,6 +22,14 @@ def _working_release(root: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"scores")
         (path.parent / "local.json").write_text("/scicore/private/path")
+    for name in _SAMPLING_DIRECTORIES:
+        directory = root / RELEASE_PATHS.get(name, name)
+        cover = directory / "directed_set_cover/metric=pocket_qcov/threshold=50.parquet"
+        cover.parent.mkdir(parents=True, exist_ok=True)
+        cover.write_bytes(b"cover")
+        cache = directory / "directed_set_cover/reductions/part.parquet"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(b"cache")
     for name in _SEARCH_DATABASES:
         folder = root / "search_databases" / name
         folder.mkdir(parents=True)
@@ -49,6 +59,12 @@ def test_public_release_contains_only_reader_artifacts(tmp_path: Path) -> None:
     assert not list(public.rglob("*.json"))
     assert not (public / "search_databases/holo_steam").exists()
     assert not (public / "scores").exists()
+    for name in _SAMPLING_DIRECTORIES:
+        directory = public / RELEASE_PATHS.get(name, name)
+        assert (
+            directory / "directed_set_cover/metric=pocket_qcov/threshold=50.parquet"
+        ).read_bytes() == b"cover"
+        assert not (directory / "directed_set_cover/reductions").exists()
 
 
 def test_public_release_replacement_drops_old_files(tmp_path: Path) -> None:
@@ -87,9 +103,25 @@ def test_public_release_rejects_external_database_links(tmp_path: Path) -> None:
     _working_release(working)
     alias = working / "search_databases/holo_foldseek/alias"
     alias.unlink()
-    alias.symlink_to(working / "scores/temporary.parquet")
+    alias.symlink_to("../../scores/temporary.parquet")
 
     with pytest.raises(ValueError, match="link leaves the public release"):
         prepare_public_release(working, public)
+
+    assert not public.exists()
+
+
+def test_public_release_rejects_absolute_internal_database_links(
+    tmp_path: Path,
+) -> None:
+    working = tmp_path / "working"
+    public = tmp_path / "public"
+    _working_release(working)
+    alias = working / "search_databases/holo_foldseek/alias"
+    alias.unlink()
+    alias.symlink_to(working / "search_databases/holo_foldseek/db")
+
+    with pytest.raises(ValueError, match="absolute link"):
+        prepare_public_release(working, public, copy=True)
 
     assert not public.exists()

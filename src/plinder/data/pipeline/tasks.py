@@ -1792,6 +1792,7 @@ def make_ccd_ligand_dbs(
     threads: int,
     force_update: bool = False,
     minimum_similarity: float = 30.0,
+    build_parity_scores: bool = False,
 ) -> Path:
     """Build the CCD-anchored MMP/ECFP4 databases and the ligand-to-CCD match sidecar."""
     ccd_ligand_dbs.make_ccd_ligand_dbs(
@@ -1800,7 +1801,7 @@ def make_ccd_ligand_dbs(
         threads=threads,
         force_update=force_update,
         minimum_similarity=minimum_similarity,
-        build_parity_scores=False,
+        build_parity_scores=build_parity_scores,
     )
     return ccd_ligand_dbs.make_ligand_ccd_match(data_dir=data_dir)
 

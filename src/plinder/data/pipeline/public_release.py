@@ -23,10 +23,9 @@ _PARQUET_DIRECTORIES = (
     "monomer_similarity_scores",
     "ligand_archives",
     "ligand_scores",
-    "ligand_sampling",
-    "interface_sampling",
     "alignment_cigars",
 )
+_SAMPLING_DIRECTORIES = ("ligand_sampling", "interface_sampling")
 _SEARCH_DATABASES = (
     "holo_mmseqs",
     "holo_foldseek",
@@ -42,6 +41,15 @@ def _public_files(source: Path) -> list[Path]:
         if not directory.is_dir():
             raise FileNotFoundError(directory)
         files.update(path.relative_to(source) for path in directory.rglob("*.parquet"))
+    for name in _SAMPLING_DIRECTORIES:
+        directory = source / RELEASE_PATHS.get(name, name)
+        if not directory.is_dir():
+            raise FileNotFoundError(directory)
+        for cover in ("set_cover", "directed_set_cover"):
+            files.update(
+                path.relative_to(source)
+                for path in (directory / cover).glob("metric=*/threshold=*.parquet")
+            )
 
     database_root = source / RELEASE_PATHS["search_databases"]
     for name in _SEARCH_DATABASES:
@@ -70,8 +78,13 @@ def _public_files(source: Path) -> list[Path]:
     included = {source / item for item in files}
     for relative in files:
         path = source / relative
-        if path.is_symlink() and path.resolve() not in included:
-            raise ValueError(f"search database link leaves the public release: {path}")
+        if path.is_symlink():
+            if Path(os.readlink(path)).is_absolute():
+                raise ValueError(f"absolute link in public release: {path}")
+            if path.resolve() not in included:
+                raise ValueError(
+                    f"search database link leaves the public release: {path}"
+                )
     return sorted(files)
 
 

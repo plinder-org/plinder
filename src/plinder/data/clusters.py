@@ -48,6 +48,12 @@ INTERFACE_HALF_REPRESENTATIVES = Path("index/interface_half_representatives.parq
 INTERFACE_MEMBERSHIP = Path("index/interface_membership.parquet")
 
 
+def _set_slurm_memory_limit(connection: Any, share: int) -> None:
+    memory_mb = int(os.environ.get("SLURM_MEM_PER_NODE", "0"))
+    if memory_mb > 0:
+        connection.execute("SET memory_limit = ?", [f"{memory_mb * share // 5}MB"])
+
+
 def _cluster_root(data_dir: Path, entity_type: ClusterEntity) -> Path:
     if entity_type == "ligand":
         return data_dir / "ligand_clusters"
@@ -846,10 +852,7 @@ def write_symmetric_edge_fragment_batch(
     import duckdb
 
     connection = duckdb.connect()
-    if slurm_memory_mb := os.environ.get("SLURM_MEM_PER_NODE"):
-        connection.execute(
-            "SET memory_limit = ?", [f"{int(slurm_memory_mb) * 3 // 5}MB"]
-        )
+    _set_slurm_memory_limit(connection, 3)
     connection.sql(f"SET threads={threads}")
     temporary_root = scratch_dir / "duckdb"
     temporary_root.mkdir(exist_ok=True, parents=True)
@@ -1173,10 +1176,7 @@ def write_symmetric_edge_shard(
     local_output = scratch_dir / f"{metric}-{bucket:03d}.parquet"
     local_output.unlink(missing_ok=True)
     connection = duckdb.connect()
-    if slurm_memory_mb := os.environ.get("SLURM_MEM_PER_NODE"):
-        connection.execute(
-            "SET memory_limit = ?", [f"{int(slurm_memory_mb) * 3 // 5}MB"]
-        )
+    _set_slurm_memory_limit(connection, 3)
     connection.sql(f"SET threads={threads}")
     connection.sql(f"SET temp_directory='{scratch_dir.as_posix()}'")
     if fragments:
@@ -3058,10 +3058,7 @@ def _stage_directed_cover_edges(
     import duckdb
 
     connection = duckdb.connect()
-    if slurm_memory_mb := os.environ.get("SLURM_MEM_PER_NODE"):
-        connection.execute(
-            "SET memory_limit = ?", [f"{int(slurm_memory_mb) * 4 // 5}MB"]
-        )
+    _set_slurm_memory_limit(connection, 4)
     connection.sql(f"SET threads={threads}")
     connection.sql("SET preserve_insertion_order=false")
     temporary_root.mkdir(exist_ok=True, parents=True)

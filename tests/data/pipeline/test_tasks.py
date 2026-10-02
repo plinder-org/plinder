@@ -25,6 +25,30 @@ from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
 
 
+def test_ccd_builder_forwards_parity_selection(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        tasks.ccd_ligand_dbs,
+        "make_ccd_ligand_dbs",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    match = tmp_path / "ccd_dbs/ligand_ccd_match.parquet"
+    monkeypatch.setattr(
+        tasks.ccd_ligand_dbs, "make_ligand_ccd_match", lambda **_kwargs: match
+    )
+
+    assert (
+        tasks.make_ccd_ligand_dbs(
+            data_dir=tmp_path,
+            scratch_dir=tmp_path / "scratch",
+            threads=1,
+            build_parity_scores=True,
+        )
+        == match
+    )
+    assert calls[0]["build_parity_scores"] is True
+
+
 def test_foldseek_manifest_signature_reads_references_in_parallel(
     tmp_path: Path,
 ) -> None:

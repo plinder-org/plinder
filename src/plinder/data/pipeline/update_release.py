@@ -637,6 +637,10 @@ def repair_alignments(
         raw_dir = data_dir / "dbs/subdbs" / f"{search_db}_{alignment_type}" / "aln"
         for pdb_id in full_queries | targeted_queries:
             (raw_dir / f"{pdb_id}.parquet").unlink(missing_ok=True)
+    shadowed_path = data_dir / "manifests/weekly_shadowed_entries.parquet"
+    shadowed = set(
+        map(str, pq.read_table(shadowed_path, columns=["pdb_id"])["pdb_id"].to_pylist())
+    )
     if targeted_queries:
         changed_targets = _changed_target_database(
             data_dir,
@@ -659,15 +663,6 @@ def repair_alignments(
                     changed_targets / f"{search_db}_{backend}/exact_cluster.json"
                 ).is_file()
             ]
-            shadowed_path = data_dir / "manifests/weekly_shadowed_entries.parquet"
-            shadowed = set(
-                map(
-                    str,
-                    pq.read_table(shadowed_path, columns=["pdb_id"])[
-                        "pdb_id"
-                    ].to_pylist(),
-                )
-            )
             for source_label, query_ids in (
                 ("base", targeted_queries - shadowed),
                 ("overlay", targeted_queries & shadowed),
@@ -701,7 +696,7 @@ def repair_alignments(
                 search_db=search_db,
                 shards=targeted_shards,
                 replacement_query_ids=targeted_queries,
-                replacement_target_ids=affected,
+                replacement_target_ids=shadowed,
                 scorer_cfg=selected_cfg,
                 scratch_dir=scratch_dir / f"map-targeted-{search_db}",
                 threads=threads,
@@ -712,10 +707,6 @@ def repair_alignments(
                 )
                 for pdb_id in targeted_queries:
                     (raw_dir / f"{pdb_id}.parquet").unlink(missing_ok=True)
-    shadowed_path = data_dir / "manifests/weekly_shadowed_entries.parquet"
-    shadowed = set(
-        map(str, pq.read_table(shadowed_path, columns=["pdb_id"])["pdb_id"].to_pylist())
-    )
     for source_label, query_ids in (
         ("base", full_queries - shadowed),
         ("overlay", full_queries & shadowed),
@@ -2114,15 +2105,20 @@ def refresh_ligand_chemistry(
     )
     ccd = None
     if "make_ccd_ligand_dbs" not in cfg.flow.skip_specific_stages:
-        if (ccd_ligand_dbs.ccd_dbs_dir(data_dir) / "ccd_dbs.manifest.json").is_file():
-            ccd = ccd_ligand_dbs.make_ligand_ccd_match(data_dir=data_dir)
-        else:
-            ccd = tasks.make_ccd_ligand_dbs(
-                data_dir=data_dir,
-                scratch_dir=scratch_dir / "ccd",
-                threads=threads,
-                minimum_similarity=float(cfg.ligand.minimum_similarity),
+        ccd_manifest = (
+            read_json_cache(
+                ccd_ligand_dbs.ccd_dbs_dir(data_dir) / "ccd_dbs.manifest.json"
             )
+            or {}
+        )
+        ccd = tasks.make_ccd_ligand_dbs(
+            data_dir=data_dir,
+            scratch_dir=scratch_dir / "ccd",
+            threads=threads,
+            minimum_similarity=float(cfg.ligand.minimum_similarity),
+            build_parity_scores=bool(ccd_manifest.get("build_parity_scores"))
+            or ccd_ligand_dbs.ccd_parity_path(data_dir).is_file(),
+        )
     return {
         "status": "complete",
         "tanimoto": ligand_scores,

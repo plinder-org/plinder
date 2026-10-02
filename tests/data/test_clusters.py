@@ -8,6 +8,24 @@ import pandas as pd
 import pytest
 
 
+def test_slurm_zero_memory_does_not_limit_duckdb(monkeypatch):
+    from plinder.data.clusters import _set_slurm_memory_limit
+
+    calls = []
+
+    class Connection:
+        def execute(self, query, values):
+            calls.append((query, values))
+
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", "0")
+    _set_slurm_memory_limit(Connection(), 3)
+    assert calls == []
+
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", "1000")
+    _set_slurm_memory_limit(Connection(), 4)
+    assert calls == [("SET memory_limit = ?", ["800MB"])]
+
+
 def _component_partition(labels: pd.DataFrame) -> set[frozenset[str]]:
     return {
         frozenset(group["ligand_id"].astype(str))

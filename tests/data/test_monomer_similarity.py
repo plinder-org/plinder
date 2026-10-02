@@ -175,3 +175,26 @@ def test_finalize_monomer_scores_requires_every_batch(tmp_path: Path) -> None:
         finalize_monomer_similarity_scores(tmp_path, query_batch_count=1)
     assert staging.is_dir()
     assert not (tmp_path / "exports/monomer_similarity_scores").exists()
+
+
+def test_finalize_monomer_scores_rejects_extra_or_zero_batches(tmp_path: Path) -> None:
+    staging = tmp_path / "exports/.monomer_similarity_scores_staging"
+    for backend in ("mmseqs", "foldseek"):
+        for target_kind in ("holo", "monomer"):
+            source = (
+                staging / f"alignment_type={backend}" / f"target_kind={target_kind}"
+            )
+            source.mkdir(parents=True)
+            for index in range(2):
+                pq.write_table(
+                    PROTEIN_SIMILARITY_EXPORT_SCHEMA.empty_table(),
+                    source / f"part-{index}.parquet",
+                )
+
+    with pytest.raises(ValueError, match="positive"):
+        finalize_monomer_similarity_scores(tmp_path, query_batch_count=0)
+    with pytest.raises(ValueError, match="unexpected monomer score batches"):
+        finalize_monomer_similarity_scores(tmp_path, query_batch_count=1)
+
+    assert staging.is_dir()
+    assert not (tmp_path / "exports/monomer_similarity_scores").exists()

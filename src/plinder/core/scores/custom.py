@@ -2166,8 +2166,7 @@ def write_custom_chain_similarity_scores(
             scores["lddt"] = pd.NA
         for column in ("qcov", "tcov", "fident", "seqsim", "lddt"):
             scores[column] = (
-                (pd.to_numeric(scores[column], errors="coerce") * 100)
-                .round()
+                np.floor(pd.to_numeric(scores[column], errors="coerce") * 100 + 0.5)
                 .clip(0, 100)
                 .astype("UInt8")
             )

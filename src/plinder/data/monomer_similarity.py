@@ -236,12 +236,26 @@ def finalize_monomer_similarity_scores(
     data_dir: Path, *, query_batch_count: int = 8
 ) -> int:
     """Install the complete monomer-pair table after every batch succeeds."""
+    if query_batch_count < 1:
+        raise ValueError("query_batch_count must be positive")
     exports = Path(data_dir) / "exports"
     staging = exports / ".monomer_similarity_scores_staging"
     installing = exports / ".monomer_similarity_scores_installing"
     installed = exports / "monomer_similarity_scores"
     if installed.exists():
         raise FileExistsError(installed)
+    expected = {
+        staging
+        / f"alignment_type={backend}"
+        / f"target_kind={target_kind}"
+        / f"part-{batch_index}.parquet"
+        for backend in ("mmseqs", "foldseek")
+        for target_kind in ("holo", "monomer")
+        for batch_index in range(query_batch_count)
+    }
+    extra = set(staging.rglob("*.parquet")) - expected
+    if extra:
+        raise ValueError(f"unexpected monomer score batches: {sorted(extra)[:5]}")
     total_rows = 0
     for backend in ("mmseqs", "foldseek"):
         for target_kind in ("holo", "monomer"):
