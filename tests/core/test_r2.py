@@ -17,7 +17,7 @@ from plinder.core.utils import r2 as dataset
 @pytest.fixture
 def mirror(tmp_path, monkeypatch):
     origin = tmp_path / "origin"
-    release = origin / "2024-06/v2"
+    release = origin / "2026-09"
     release.mkdir(parents=True)
     records = []
     for key, data in [
@@ -46,10 +46,10 @@ def mirror(tmp_path, monkeypatch):
     cfg = SimpleNamespace(
         data=SimpleNamespace(
             plinder_bucket="plinder",
-            plinder_release="2024-06",
-            plinder_release_number="v2",
+            plinder_release="2026-09",
+            plinder_release_number="",
             plinder_dir=str(tmp_path / "cache"),
-            plinder_remote=f"http://127.0.0.1:{server.server_port}/2024-06/v2",
+            plinder_remote=f"http://127.0.0.1:{server.server_port}/2026-09",
             force_update=False,
         )
     )
@@ -95,10 +95,13 @@ def test_path_traversal_rejected(mirror, rel):
         cpl.get_plinder_path(rel=rel)
 
 
-def test_unsupported_release_rejected(mirror):
+@pytest.mark.parametrize(
+    "release", [("2024-06", "v2"), ("2026-09", "1"), ("2026-9", ""), ("2026-13", "")]
+)
+def test_unsupported_release_rejected(mirror, release):
     cfg, _ = mirror
-    cfg.data.plinder_release_number = "v1"
-    with pytest.raises(ValueError, match="2024-06/v2"):
+    cfg.data.plinder_release, cfg.data.plinder_release_number = release
+    with pytest.raises(ValueError, match="YYYY-MM"):
         cpl.get_plinder_path(rel="systems")
 
 

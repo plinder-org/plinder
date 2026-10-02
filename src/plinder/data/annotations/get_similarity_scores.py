@@ -2751,9 +2751,13 @@ class Scorer:
                 aln_df = aln_df.drop(columns="_merge")
                 for column in score_columns:
                     aln_df[column] = aln_df[column].astype(float) / 100
+            # Custom-scoring alignments keep their CIGARs but are already
+            # mapped to residue numbers, so only undecoded release shards
+            # need the chain lookup.
             if (
                 "cigar" in aln_df.columns
                 and "query_selected_residue_positions" not in aln_df.columns
+                and "query_selected_residue_numbers" not in aln_df.columns
             ):
                 if self.alignment_chain_lookup is None:
                     raise ValueError("CIGAR alignments require a chain lookup")

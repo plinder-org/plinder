@@ -19,6 +19,4 @@ The CI workflow will use the **most recent** match in the commit history to make
 Each new version release automatically triggers the following platforms:
 
 - A new *PyPI* release is created.
-- A new *Docker* image is pushed to the
-  [registry](https://github.com/plinder-org/plinder/pkgs/container/plinder).
 - This documentation website is updated.

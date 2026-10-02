@@ -33,14 +33,17 @@ jobs:
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install plinder
+        shell: bash -el {0}
+        run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --inexact --extra docs
       - name: Build docs
         shell: bash -el {0}
         id: build
-        run: |
-          which python
-          python -m pip install six
-          python -m pip install '.[docs,loader]'
-          sphinx-build docs build/docs
+        run: sphinx-build docs build/docs
       - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
         with:

@@ -15,6 +15,9 @@ from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
 
+# Default public release: a YYYY-MM PDB snapshot stamp served flat on R2.
+DEFAULT_RELEASE = "2026-09"
+
 
 def _validate_cfg(*, cfg: DictConfig, schema: dict[str, Any]) -> DictConfig:
     """
@@ -224,10 +227,10 @@ class DataConfig:
     """
 
     plinder_release: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2026-07")
+        default_factory=partial(_getenv_default, "PLINDER_RELEASE", DEFAULT_RELEASE)
     )
     plinder_release_number: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_RELEASE_NUMBER", "1")
+        default_factory=partial(_getenv_default, "PLINDER_RELEASE_NUMBER", "")
     )
     plinder_mount: str = field(
         default_factory=partial(
