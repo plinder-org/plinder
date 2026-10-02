@@ -35,7 +35,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install plinder
-        run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --locked --inexact
+        run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --inexact
       - name: Get version bump
         id: get-tag
         run: echo "bump=$(python flows/version.py)" >> $GITHUB_OUTPUT
