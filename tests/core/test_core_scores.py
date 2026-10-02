@@ -88,6 +88,22 @@ def similarity_release(tmp_path):
             "lddt": pd.Series([80], dtype="uint8"),
         }
     ).to_parquet(protein_scores / "shard=ab.parquet", index=False)
+    monomer_scores = exports / "monomer_similarity_scores/alignment_type=mmseqs"
+    monomer_scores.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_entry": ["3ghi"],
+            "target_entry": ["1abc"],
+            "query_chain_mapped": ["C"],
+            "target_chain_mapped": ["A"],
+            "source": ["mmseqs"],
+            "qcov": pd.Series([95], dtype="uint8"),
+            "tcov": pd.Series([75], dtype="uint8"),
+            "fident": pd.Series([65], dtype="uint8"),
+            "seqsim": pd.Series([72], dtype="uint8"),
+            "lddt": pd.Series([pd.NA], dtype="UInt8"),
+        }
+    ).to_parquet(monomer_scores / "part-0.parquet", index=False)
     alignment_shard = (
         tmp_path / "alignments/search_db=holo/alignment_type=mmseqs/shard=ab.parquet"
     )
@@ -182,6 +198,19 @@ def test_query_protein_similarity_reads_integer_scores(similarity_release):
 
     assert result.to_dict("records") == [
         {"target_entry": "2def", "fident": 70, "seqsim": 75, "lddt": 80}
+    ]
+
+
+def test_query_protein_similarity_can_include_monomer_pairs(similarity_release):
+    result = scores.query_protein_similarity(
+        columns=["query_entry", "target_entry", "fident"],
+        filters=[("target_entry", "==", "1abc")],
+        release=similarity_release,
+        include_monomers=True,
+    )
+
+    assert result.to_dict("records") == [
+        {"query_entry": "3ghi", "target_entry": "1abc", "fident": 65}
     ]
 
 

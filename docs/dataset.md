@@ -57,16 +57,20 @@ differ from the current release.
     ├── interface_sampling/
     │   └── directed_set_cover/metric=interface_qcov/threshold={threshold}.parquet
     ├── search_databases/
-    │   ├── manifest.json
     │   ├── holo_foldseek/
-    │   └── holo_mmseqs/
+    │   ├── holo_mmseqs/
+    │   ├── monomer_foldseek/
+    │   └── monomer_mmseqs/
     └── exports/
         ├── ligand_similarity_scores.parquet
         ├── interface_similarity_scores.parquet
         ├── interface_half_similarity_scores.parquet
-        └── protein_similarity_scores/
+        ├── protein_similarity_scores/
+        │   └── alignment_type={foldseek,mmseqs}/
+        │       └── shard={two_char_code}.parquet
+        └── monomer_similarity_scores/
             └── alignment_type={foldseek,mmseqs}/
-                └── shard={two_char_code}.parquet
+                └── monomer_{holo,monomer}_{batch}.parquet
 ```
 
 `plinder_download` downloads the index and representative-cover tables by
@@ -234,6 +238,15 @@ exact assembly-chain instance selected for reconstruction.
 chain-pair scores, including query and target coverage, sequence identity,
 sequence similarity, and Foldseek lDDT. Percentage values are stored as
 integers from 0 to 100.
+`exports/monomer_similarity_scores/` adds query chains outside ligand pockets
+and protein interfaces. Pass `include_monomers=True` to
+`query_protein_similarity()` to read both sets of chain pairs.
+
+For a custom structure or FASTA search, `search()` returns
+`result.chain_similarity_scores`, a Parquet file of direct chain-level hits
+with the same score fields. FASTA results retain the original sequence IDs.
+By default, chain hits also include protein chains outside ligand pockets
+and protein interfaces. Pocket and interface scores use their own targets.
 
 The optional `alignment_cigars/` files contain full-chain CIGARs, alignment
 starts, and bit-packed residue identity flags. Holo chain-pair statistics are

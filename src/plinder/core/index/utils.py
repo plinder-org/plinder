@@ -31,6 +31,7 @@ _DOWNLOAD_GROUPS = (
         "complete similarity exports",
         (
             "protein_similarity_scores",
+            "monomer_similarity_scores",
             "ligand_similarity_scores",
             "interface_similarity_scores",
             "interface_half_similarity_scores",

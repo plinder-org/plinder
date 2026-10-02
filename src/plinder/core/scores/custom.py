@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import shutil
@@ -32,12 +31,6 @@ LOG = logging.getLogger(__name__)
 CIF_SEARCH_BACKENDS = ("foldseek", "mmseqs")
 SEQUENCE_SEARCH_BACKENDS = ("mmseqs",)
 SEARCH_BACKENDS = CIF_SEARCH_BACKENDS
-EXACT_CLUSTER_CONTRACT: Mapping[str, object] = {
-    "identity": 1.0,
-    "coverage": 1.0,
-    "coverage_mode": 0,
-    "compressed_search_target": False,
-}
 
 
 @dataclass(frozen=True)
@@ -62,7 +55,13 @@ class CustomScoringAssets:
     alignment_chain_lookup: Path
     search_databases: Mapping[str, SearchDatabaseBundle]
     ligand_archives: Mapping[str, Path]
+    monomer_search_databases: Mapping[str, SearchDatabaseBundle] = field(
+        default_factory=dict
+    )
     overlay_search_databases: Mapping[str, SearchDatabaseBundle] = field(
+        default_factory=dict
+    )
+    overlay_monomer_search_databases: Mapping[str, SearchDatabaseBundle] = field(
         default_factory=dict
     )
     shadowed_entries: frozenset[str] = frozenset()
@@ -153,6 +152,7 @@ class CustomScoringResult:
     query_inputs: CustomQueryInputs
     query_databases: CustomQueryDatabases
     protein_hits: Mapping[str, Path]
+    chain_similarity_scores: Path
     score_alignments: Mapping[str, Path]
     protein_score_alignments: Mapping[str, Path]
     protein_scores: Path
@@ -168,6 +168,7 @@ class CustomSequenceScoringResult:
     query_inputs: CustomQueryInputs
     query_databases: CustomQueryDatabases
     protein_hits: Mapping[str, Path]
+    chain_similarity_scores: Path
     protein_score_alignments: Mapping[str, Path]
     protein_scores: Path
     aligned_pocket_residues: Path | None
@@ -180,15 +181,6 @@ class _SequenceEntry:
     """Small entry stand-in needed while reversing custom alignments."""
 
     pdb_id: str
-
-
-def _manifest_member(root: Path, value: object, *, field: str) -> Path:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"invalid {field} in {root / 'exact_cluster.json'}")
-    relative = Path(value)
-    if relative.is_absolute() or relative.name != value:
-        raise ValueError(f"unsafe {field} in {root / 'exact_cluster.json'}: {value}")
-    return root / relative
 
 
 def _require_database_prefix(
@@ -219,12 +211,16 @@ def _validate_portable_links(root: Path) -> None:
             raise ValueError(f"non-portable database link: {path} -> {path.readlink()}")
 
 
-def _local_search_database_root(data_dir: Path, backend: str) -> Path:
+def _local_search_database_root(
+    data_dir: Path, backend: str, *, monomer: bool = False
+) -> Path:
     """Resolve either a published bundle or an unmodified ingest output."""
-    published = PlinderRelease(data_dir).path("search_database", backend=backend)
+    artifact = "monomer_search_database" if monomer else "search_database"
+    prefix = "monomer" if monomer else "holo"
+    published = PlinderRelease(data_dir).path(artifact, backend=backend)
     if published.is_dir():
         return published
-    ingest = data_dir / "dbs" / "subdbs" / f"holo_{backend}"
+    ingest = data_dir / "dbs" / "subdbs" / f"{prefix}_{backend}"
     return ingest if ingest.is_dir() else published
 
 
@@ -232,67 +228,35 @@ def resolve_search_database(
     backend: str,
     *,
     data_dir: Path | None = None,
+    monomer: bool = False,
 ) -> SearchDatabaseBundle:
     """Download or validate one portable PLINDER search database bundle."""
     if backend not in SEARCH_BACKENDS:
         raise ValueError(
             f"unsupported search backend {backend!r}; expected one of {SEARCH_BACKENDS}"
         )
+    artifact = "monomer_search_database" if monomer else "search_database"
     if data_dir is None:
         root = _release_file(
-            "search_database",
+            artifact,
             data_dir=None,
             description=f"{backend} search database",
             backend=backend,
         )
     else:
-        root = _local_search_database_root(Path(data_dir), backend)
+        root = _local_search_database_root(Path(data_dir), backend, monomer=monomer)
     return _validate_search_database(backend, Path(root))
 
 
 def _validate_search_database(backend: str, root: Path) -> SearchDatabaseBundle:
     root = Path(root)
-    manifest_path = _require_file(
-        root / "exact_cluster.json",
-        description=f"{backend} search database manifest",
-    )
-    try:
-        manifest = json.loads(manifest_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"invalid search database manifest: {manifest_path}") from exc
-    if not isinstance(manifest, dict):
-        raise ValueError(f"invalid search database manifest: {manifest_path}")
-    if manifest.get("alignment_type") != backend:
-        raise ValueError(
-            f"search database backend mismatch in {manifest_path}: "
-            f"{manifest.get('alignment_type')!r}"
-        )
-    if manifest.get("portable") is not True:
-        raise ValueError(f"search database is not portable: {manifest_path}")
-    mismatches = {
-        key: manifest.get(key)
-        for key, expected in EXACT_CLUSTER_CONTRACT.items()
-        if manifest.get(key) != expected
-    }
-    if mismatches:
-        raise ValueError(
-            f"search database does not satisfy the exact-cluster contract in "
-            f"{manifest_path}: {mismatches}"
-        )
-
-    search_target = _manifest_member(
-        root, manifest.get("search_target"), field="search_target"
-    )
-    conversion_target = _manifest_member(
-        root, manifest.get("conversion_target"), field="conversion_target"
-    )
-    cluster_alignments = None
-    if backend == "mmseqs":
-        cluster_alignments = _manifest_member(
-            root,
-            manifest.get("cluster_alignments"),
-            field="cluster_alignments",
-        )
+    if backend == "foldseek":
+        search_target = conversion_target = root / "clustered"
+        cluster_alignments = None
+    else:
+        search_target = root / "representatives"
+        conversion_target = root / root.name
+        cluster_alignments = root / "cluster_alignments"
 
     _require_database_prefix(
         search_target,
@@ -315,7 +279,7 @@ def _validate_search_database(backend: str, root: Path) -> SearchDatabaseBundle:
         search_target=search_target,
         conversion_target=conversion_target,
         cluster_alignments=cluster_alignments,
-        manifest=manifest,
+        manifest={},
     )
 
 
@@ -349,6 +313,7 @@ def resolve_custom_scoring_assets(
     data_dir: Path | None = None,
     backends: Iterable[str] = CIF_SEARCH_BACKENDS,
     ligand_pdb_ids: Iterable[str] = (),
+    include_monomers: bool = False,
 ) -> CustomScoringAssets:
     """Download or validate the bounded asset set for custom scoring.
 
@@ -376,34 +341,47 @@ def resolve_custom_scoring_assets(
         backend: resolve_search_database(backend, data_dir=data_dir)
         for backend in selected_backends
     }
+    monomer_databases = (
+        {
+            backend: resolve_search_database(backend, data_dir=data_dir, monomer=True)
+            for backend in selected_backends
+        }
+        if include_monomers
+        else {}
+    )
     release = PlinderRelease(data_dir)
-    try:
-        manifest_path = release.fetch("search_databases_manifest")
-    except FileNotFoundError:
-        manifest = {}
-    else:
-        manifest = json.loads(manifest_path.read_text())
-        if not isinstance(manifest, dict):
-            raise ValueError(f"invalid search database manifest: {manifest_path}")
-    overlays = manifest.get("overlays", {})
-    if not isinstance(overlays, dict):
-        raise ValueError("invalid search database overlay list")
-    overlay_databases = {
-        backend: _validate_search_database(
-            backend,
-            release.fetch("search_database_overlay", backend=backend),
-        )
-        for backend in selected_backends
-        if backend in overlays
-    }
+    overlay_databases = {}
+    overlay_monomer_databases = {}
+    for backend in selected_backends:
+        try:
+            overlay = release.fetch("search_database_overlay", backend=backend)
+        except FileNotFoundError:
+            pass
+        else:
+            overlay_databases[backend] = _validate_search_database(backend, overlay)
+        if include_monomers:
+            try:
+                monomer_overlay = release.fetch(
+                    "monomer_search_database_overlay", backend=backend
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                overlay_monomer_databases[backend] = _validate_search_database(
+                    backend, monomer_overlay
+                )
     shadowed_entries: frozenset[str] = frozenset()
-    if manifest.get("shadowed_entries"):
+    try:
         shadowed_path = release.fetch("search_database_shadowed_entries")
+    except FileNotFoundError:
+        if overlay_databases or overlay_monomer_databases:
+            raise ValueError(
+                "search database overlay is missing shadowed entries"
+            ) from None
+    else:
         shadowed_entries = frozenset(
             pd.read_parquet(shadowed_path, columns=["pdb_id"])["pdb_id"].astype(str)
         )
-    if overlay_databases and not shadowed_entries:
-        raise ValueError("search database overlay is missing its shadowed entry list")
     ligand_archives = resolve_ligand_archives(
         ligand_pdb_ids,
         data_dir=data_dir,
@@ -415,7 +393,9 @@ def resolve_custom_scoring_assets(
         alignment_chain_lookup=resolved_index["alignment_chain_lookup"],
         search_databases=databases,
         ligand_archives=ligand_archives,
+        monomer_search_databases=monomer_databases,
         overlay_search_databases=overlay_databases,
+        overlay_monomer_search_databases=overlay_monomer_databases,
         shadowed_entries=shadowed_entries,
     )
 
@@ -1129,8 +1109,9 @@ def _build_mmseqs_target_subset(
     entry_ids: Iterable[str],
     output_dir: Path,
     threads: int = 1,
-) -> SearchDatabaseBundle:
-    """Build an MMseqs target from scoreable chains in selected entries."""
+    monomer_only: bool = False,
+) -> SearchDatabaseBundle | None:
+    """Build a bounded MMseqs target from selected release chains."""
     selected = _plinder_entry_subset(entry_ids)
     assert selected is not None
     if threads < 1:
@@ -1147,6 +1128,7 @@ def _build_mmseqs_target_subset(
             "chain_receptor_type",
             "chain_is_holo",
             "chain_sequence",
+            *(["chain_is_ligand_like"] if monomer_only else []),
         ],
         filters=[("entry_pdb_id", "in", list(selected))],
     )
@@ -1175,18 +1157,25 @@ def _build_mmseqs_target_subset(
         how="left",
         validate="one_to_one",
     )
+    scoreable = chains["chain_is_holo"].fillna(False).astype(bool) | chains[
+        "chain_is_interface"
+    ].eq(True)
+    selected_chains = (
+        ~scoreable & ~chains["chain_is_ligand_like"].fillna(False)
+        if monomer_only
+        else scoreable
+    )
     chains = chains.loc[
         chains["chain_receptor_type"].fillna("").astype(str).eq("protein")
-        & (
-            chains["chain_is_holo"].fillna(False).astype(bool)
-            | chains["chain_is_interface"].eq(True)
-        )
+        & selected_chains
         & chains["chain_auth_id"].notna()
         & chains["chain_sequence"].notna()
     ].copy()
+    if monomer_only and chains.empty:
+        return None
     found = set(chains["entry_pdb_id"].astype(str))
     missing = sorted(set(selected).difference(found))
-    if missing:
+    if missing and not monomer_only:
         raise ValueError(
             "selected PLINDER entries have no scoreable receptor or interface "
             f"chains: {missing[:10]}"
@@ -1248,12 +1237,14 @@ def _resolve_workflow_assets(
     plinder_entry_ids: tuple[str, ...] | None,
     work_dir: Path,
     threads: int,
+    include_monomers: bool = False,
 ) -> CustomScoringAssets:
     if plinder_entry_ids is not None and backends != ("mmseqs",):
         raise ValueError("plinder_entry_ids currently requires backends=('mmseqs',)")
     assets = resolve_custom_scoring_assets(
         data_dir=data_dir,
         backends=() if plinder_entry_ids is not None else backends,
+        include_monomers=include_monomers and plinder_entry_ids is None,
     )
     if plinder_entry_ids is None:
         return assets
@@ -1264,7 +1255,27 @@ def _resolve_workflow_assets(
         output_dir=work_dir / "plinder_target_subset",
         threads=threads,
     )
-    return replace(assets, search_databases={"mmseqs": subset})
+    assert subset is not None
+    monomer_subset = (
+        _build_mmseqs_target_subset(
+            assets.entry_chains,
+            assets.interface_annotations,
+            entry_ids=plinder_entry_ids,
+            output_dir=work_dir / "plinder_monomer_subset",
+            threads=threads,
+            monomer_only=True,
+        )
+        if include_monomers
+        else None
+    )
+    return replace(
+        assets,
+        search_databases={"mmseqs": subset},
+        monomer_search_databases=(
+            {"mmseqs": monomer_subset} if monomer_subset is not None else {}
+        ),
+        shadowed_entries=frozenset(),
+    )
 
 
 def _parse_plinder_target_identifier(
@@ -1938,6 +1949,7 @@ def prepare_custom_protein_score_alignments(
             columns=[
                 "qaln",
                 "taln",
+                "cigar",
                 "target_selected_residue_indices",
             ],
             errors="ignore",
@@ -2065,6 +2077,122 @@ def run_custom_protein_searches(
             pd.concat(frames, ignore_index=True).to_parquet(output, index=False)
         outputs[backend] = output
     return outputs
+
+
+def run_custom_monomer_searches(
+    *,
+    query_databases: CustomQueryDatabases,
+    assets: CustomScoringAssets,
+    output_dir: Path,
+    scratch_dir: Path,
+    config: CustomProteinSearchConfig | None,
+    backends: Iterable[str],
+    threads: int,
+) -> dict[str, Path]:
+    """Search protein chains absent from pocket/interface targets."""
+    if not assets.monomer_search_databases:
+        return {}
+    monomer_assets = replace(
+        assets,
+        search_databases=assets.monomer_search_databases,
+        overlay_search_databases=assets.overlay_monomer_search_databases,
+    )
+    return run_custom_protein_searches(
+        query_databases=query_databases,
+        assets=monomer_assets,
+        output_dir=output_dir,
+        scratch_dir=scratch_dir,
+        config=config,
+        backends=(
+            backend
+            for backend in backends
+            if backend in assets.monomer_search_databases
+        ),
+        threads=threads,
+    )
+
+
+def write_custom_chain_similarity_scores(
+    protein_hits: Mapping[str, Path],
+    *,
+    output_path: Path,
+    chain_manifest: Path | None = None,
+    monomer_hits: Mapping[str, Path] | None = None,
+) -> Path:
+    """Write direct custom-to-PLINDER protein-chain alignment scores.
+
+    Coverage and similarity values use integer percentages, as in the release
+    protein similarity table. Each alignment remains a separate row.
+    """
+    from plinder.data.annotations.get_similarity_scores import (
+        get_sequence_similarity_helper,
+    )
+
+    columns = [
+        "sequence_id",
+        "query_id",
+        "query_chain_id",
+        "structure_id",
+        "query_chain_asym_id",
+        "target_entry",
+        "target_chain_asym_id",
+        "source",
+        "qcov",
+        "tcov",
+        "fident",
+        "seqsim",
+        "lddt",
+    ]
+    frames = []
+    for backend, path in [*protein_hits.items(), *(monomer_hits or {}).items()]:
+        hits = pd.read_parquet(path)
+        if hits.empty:
+            continue
+        required = set(columns).difference({"sequence_id", "seqsim", "lddt"}) | {
+            "qaln",
+            "taln",
+        }
+        if backend == "foldseek":
+            required.add("lddt")
+        missing = sorted(required.difference(hits.columns))
+        if missing:
+            raise ValueError(f"{backend} custom hit table is missing columns {missing}")
+        scores = hits[[column for column in columns if column in hits]].copy()
+        scores["seqsim"] = [
+            get_sequence_similarity_helper(str(query).upper(), str(target).upper())
+            for query, target in zip(hits["qaln"], hits["taln"], strict=True)
+        ]
+        if "lddt" not in scores:
+            scores["lddt"] = pd.NA
+        for column in ("qcov", "tcov", "fident", "seqsim", "lddt"):
+            scores[column] = (
+                (pd.to_numeric(scores[column], errors="coerce") * 100)
+                .round()
+                .clip(0, 100)
+                .astype("UInt8")
+            )
+        frames.append(scores)
+    result = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=columns)
+    )
+    if chain_manifest is not None:
+        manifest = pd.read_parquet(chain_manifest, columns=["query_id", "sequence_id"])
+        if manifest["query_id"].duplicated().any():
+            raise ValueError("query chain manifest contains duplicate query IDs")
+        result = result.merge(
+            manifest, on="query_id", how="left", validate="many_to_one"
+        )
+        if result["sequence_id"].isna().any():
+            raise ValueError("custom chain scores contain unknown query IDs")
+    else:
+        result["sequence_id"] = pd.NA
+    result = result[columns]
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    result.to_parquet(output_path, index=False, compression="zstd")
+    return output_path
 
 
 def _target_entry_ids(score_alignments: Mapping[str, Path]) -> set[str]:
@@ -2674,6 +2802,7 @@ def score_custom_sequence_file(
     plinder_entry_ids: Iterable[str] | None = None,
     threads: int = 1,
     store_aligned_pocket_residues: bool = False,
+    include_monomers: bool = False,
 ) -> CustomSequenceScoringResult:
     """Search protein sequences and score PLINDER ligand-pocket identity.
 
@@ -2710,6 +2839,7 @@ def score_custom_sequence_file(
         plinder_entry_ids=selected_plinder_entries,
         work_dir=work_dir,
         threads=threads,
+        include_monomers=include_monomers,
     )
     protein_hits = run_custom_protein_searches(
         query_databases=query_databases,
@@ -2721,6 +2851,24 @@ def score_custom_sequence_file(
         config=search_config,
         backends=selected_backends,
         threads=threads,
+    )
+    monomer_hits = run_custom_monomer_searches(
+        query_databases=query_databases,
+        assets=assets,
+        output_dir=work_dir / "monomer_hits",
+        scratch_dir=(
+            Path(scratch_dir) if scratch_dir is not None else work_dir / "scratch"
+        )
+        / "monomer",
+        config=search_config,
+        backends=selected_backends,
+        threads=threads,
+    )
+    chain_similarity_scores = write_custom_chain_similarity_scores(
+        protein_hits,
+        output_path=work_dir / "chain_similarity_scores.parquet",
+        chain_manifest=query_inputs.chain_manifest,
+        monomer_hits=monomer_hits,
     )
     manifest = pd.read_parquet(query_inputs.chain_manifest)
     entries_by_structure = {
@@ -2766,6 +2914,7 @@ def score_custom_sequence_file(
         query_inputs=query_inputs,
         query_databases=query_databases,
         protein_hits=protein_hits,
+        chain_similarity_scores=chain_similarity_scores,
         protein_score_alignments=protein_score_alignments,
         protein_scores=protein_score_path,
         aligned_pocket_residues=aligned_pocket_residue_path,
@@ -2940,6 +3089,7 @@ def score_custom_cif_files(
     threads: int = 1,
     shape_score_threads: int = 1,
     store_aligned_pocket_residues: bool = False,
+    include_monomers: bool = False,
 ) -> CustomScoringResult:
     """Run custom-CIF annotation, protein search, and PLINDER scoring.
 
@@ -3008,6 +3158,7 @@ def score_custom_cif_files(
         plinder_entry_ids=selected_plinder_entries,
         work_dir=work_dir,
         threads=threads,
+        include_monomers=include_monomers,
     )
     protein_hits = run_custom_protein_searches(
         query_databases=query_databases,
@@ -3019,6 +3170,23 @@ def score_custom_cif_files(
         config=search_config,
         backends=selected_backends,
         threads=threads,
+    )
+    monomer_hits = run_custom_monomer_searches(
+        query_databases=query_databases,
+        assets=assets,
+        output_dir=work_dir / "monomer_hits",
+        scratch_dir=(
+            Path(scratch_dir) if scratch_dir is not None else work_dir / "scratch"
+        )
+        / "monomer",
+        config=search_config,
+        backends=selected_backends,
+        threads=threads,
+    )
+    chain_similarity_scores = write_custom_chain_similarity_scores(
+        protein_hits,
+        output_path=work_dir / "chain_similarity_scores.parquet",
+        monomer_hits=monomer_hits,
     )
     score_alignments = prepare_custom_score_alignments(
         protein_hits,
@@ -3091,6 +3259,7 @@ def score_custom_cif_files(
         query_inputs=query_inputs,
         query_databases=query_databases,
         protein_hits=protein_hits,
+        chain_similarity_scores=chain_similarity_scores,
         score_alignments=score_alignments,
         protein_score_alignments=protein_score_alignments,
         protein_scores=protein_score_path,

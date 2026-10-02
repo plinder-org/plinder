@@ -1765,6 +1765,9 @@ def test_search_bundle_includes_weekly_overlay(tmp_path, monkeypatch) -> None:
 
     base = tmp_path / "dbs/subdbs/holo_mmseqs"
     base.mkdir(parents=True)
+    monomer = tmp_path / "dbs/subdbs/monomer_mmseqs"
+    monomer.mkdir(parents=True)
+    (monomer / "exact_cluster.json").write_text("{}")
     overlay = tmp_path / "dbs/weekly_delta/subdbs/holo_mmseqs"
     overlay.mkdir(parents=True)
     (overlay / "exact_cluster.json").write_text("{}")
@@ -1784,9 +1787,10 @@ def test_search_bundle_includes_weekly_overlay(tmp_path, monkeypatch) -> None:
 
     score.publish_search_database_bundles(tmp_path, alignment_types=["mmseqs"])
 
-    assert sources == [base, overlay]
-    manifest = json.loads((tmp_path / "search_databases/manifest.json").read_text())
-    assert set(manifest["overlays"]) == {"mmseqs"}
+    assert sources == [base, monomer, overlay]
+    assert not (tmp_path / "search_databases/manifest.json").exists()
+    assert (tmp_path / "search_databases/monomer_mmseqs").is_dir()
+    assert (tmp_path / "search_databases/weekly_delta/holo_mmseqs").is_dir()
     assert pd.read_parquet(tmp_path / "search_databases/shadowed_entries.parquet")[
         "pdb_id"
     ].tolist() == ["1abc"]
@@ -1925,7 +1929,7 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
     assert report["target_clustering"]["expand_to_chain_level"] is True
     assert report["skipped_queries"] == {}
     assert (tmp_path / "alignments/manifest.json").is_file()
-    assert (tmp_path / "search_databases/manifest.json").is_file()
+    assert not (tmp_path / "search_databases/manifest.json").exists()
     assert (tmp_path / "search_databases/holo_foldseek/clustered.dbtype").is_file()
     assert (
         tmp_path / "search_databases/holo_mmseqs/cluster_alignments.dbtype"
@@ -7279,6 +7283,32 @@ def test_make_sub_dbs_loads_entry_chain_index(tmp_path, monkeypatch):
         "threads": 1,
     }
     assert lookup_calls == [{"data_dir": tmp_path, "scratch_dir": None, "threads": 1}]
+
+
+def test_monomer_scoring_chains_excludes_holo_and_ligand_like_chains(
+    tmp_path, monkeypatch
+):
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"] * 4,
+            "chain_asym_id": ["A", "B", "C", "D"],
+            "chain_auth_id": ["A", "B", "C", "D"],
+            "chain_receptor_type": ["protein", "protein", "protein", "dna"],
+            "chain_is_ligand_like": [False, False, True, False],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    monkeypatch.setattr(
+        tasks,
+        "_protein_scoring_chains",
+        lambda _data_dir: pd.DataFrame(
+            {"entry_pdb_id": ["1abc"], "chain_asym_id": ["A"]}
+        ),
+    )
+
+    result = tasks._monomer_scoring_chains(tmp_path)
+    assert result["chain_asym_id"].tolist() == ["B"]
 
 
 def test_make_holo_sub_dbs_selects_protein_receptor_and_interface_chains(
