@@ -659,6 +659,51 @@ def test_weekly_target_repair_restores_only_needed_query_caches(tmp_path):
         ).exists()
 
 
+def test_weekly_target_repair_splits_interleaved_packed_rows_once(tmp_path):
+    base = tmp_path / "base"
+    workspace = tmp_path / "workspace"
+    score_root = base / "dbs/subdbs/search_db=holo"
+    score_root.mkdir(parents=True)
+    for pdb_id in ("1abc", "2abc", "3abc"):
+        pd.DataFrame({"query_system": [f"{pdb_id}__1"]}).to_parquet(
+            score_root / f"{pdb_id}.parquet", index=False
+        )
+    for folder, schema in (
+        ("ligand_3d_candidate_shards", schemas.LIGAND_3D_CANDIDATE_SCHEMA),
+        ("ligand_pair_score_shards", schemas.LIGAND_PAIR_SCORE_SCHEMA),
+    ):
+        packed = base / "scores" / folder / "shard=ab.parquet"
+        packed.parent.mkdir(parents=True)
+        pq.write_table(
+            pa.Table.from_pylist(
+                [
+                    {"query_entry": "2abc", "target_entry": "4def"},
+                    {"query_entry": "1abc", "target_entry": "5def"},
+                    {"query_entry": "2abc", "target_entry": "6def"},
+                ],
+                schema=schema,
+            ),
+            packed,
+        )
+
+    update_release._restore_score_query_caches(
+        base_data_dir=base,
+        data_dir=workspace,
+        query_ids={"1abc", "2abc", "3abc"},
+    )
+
+    for folder in ("ligand_3d_candidates", "ligand_pair_scores"):
+        cache = workspace / "scores" / folder / "search_db=holo/shard=ab"
+        assert pd.read_parquet(cache / "1abc.parquet")["target_entry"].tolist() == [
+            "5def"
+        ]
+        assert pd.read_parquet(cache / "2abc.parquet")["target_entry"].tolist() == [
+            "4def",
+            "6def",
+        ]
+        assert pd.read_parquet(cache / "3abc.parquet").empty
+
+
 def test_ligand_score_export_removes_stale_shards(tmp_path, monkeypatch):
     shard_dir = tmp_path / "exports" / "ligand_similarity_scores"
     shard_dir.mkdir(parents=True)
@@ -823,10 +868,21 @@ def test_old_target_discovery_reads_retained_cigars(tmp_path):
             "target_entry": ["9xyz", "8xyz", "9xyz"],
         }
     ).to_parquet(cigar, index=False)
+    foldseek = (
+        tmp_path
+        / "alignment_cigars/search_db=holo/alignment_type=foldseek/shard=cd.parquet"
+    )
+    foldseek.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_entry": ["1abc", "4abc", None],
+            "target_entry": ["9xyz", "9xyz", "9xyz"],
+        }
+    ).to_parquet(foldseek, index=False)
 
     assert update_release._queries_with_old_target_hits(
         tmp_path, search_db="holo", affected={"9xyz"}
-    ) == {"1abc", "3abc"}
+    ) == {"1abc", "3abc", "4abc"}
 
 
 def test_changed_target_probe_searches_in_reverse_once_per_backend(
@@ -1095,6 +1151,33 @@ def test_pred_alignment_repairs_only_changed_queries(tmp_path, monkeypatch):
         scratch_dir=tmp_path / "scratch",
         threads=1,
     ) == {"1abc"}
+
+
+def test_changed_target_database_reuses_weekly_subdb(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        update_release,
+        "_scoring_chains",
+        lambda *_args: pd.DataFrame(
+            {
+                "entry_pdb_id": ["1abc"],
+                "chain_asym_id": ["A"],
+                "chain_auth_id": ["A"],
+            }
+        ),
+    )
+    subdb = tmp_path / "dbs/weekly_delta/subdbs"
+    exact = subdb / "holo_mmseqs/exact_cluster.json"
+    exact.parent.mkdir(parents=True)
+    exact.write_text("{}")
+
+    assert (
+        update_release._changed_target_database(
+            tmp_path,
+            search_db="holo",
+            affected={"1abc"},
+        )
+        == subdb
+    )
 
 
 def test_release_update_runs_only_configured_search_databases(tmp_path, monkeypatch):
