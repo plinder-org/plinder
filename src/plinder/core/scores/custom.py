@@ -2180,6 +2180,7 @@ def write_custom_chain_similarity_scores(
         manifest = pd.read_parquet(chain_manifest, columns=["query_id", "sequence_id"])
         if manifest["query_id"].duplicated().any():
             raise ValueError("query chain manifest contains duplicate query IDs")
+        result = result.drop(columns="sequence_id", errors="ignore")
         result = result.merge(
             manifest, on="query_id", how="left", validate="many_to_one"
         )

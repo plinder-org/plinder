@@ -36,6 +36,7 @@ def test_custom_chain_similarity_scores_keep_each_alignment(tmp_path):
         frame = pd.DataFrame(
             [
                 {
+                    "sequence_id": "generated-placeholder",
                     "query_id": "model2" if backend == "foldseek" else "model",
                     "query_chain_id": (
                         "model2__A" if backend == "foldseek" else "model__A"
