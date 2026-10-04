@@ -106,6 +106,20 @@ def download_paths(*, paths: list[Path], force_progress: bool = False) -> None:
         _download(_get_client(), paths, force_progress)
 
 
+def _prune_unpublished(client: ReleaseClient, directory: Path) -> None:
+    """Remove cached Parquet files that the release no longer lists.
+
+    Directory artifacts are read as whole Parquet datasets, so a file dropped
+    from an updated release would otherwise be read alongside its replacement.
+    """
+    root = Path(get_config().data.plinder_dir)
+    for path in directory.rglob("*.parquet"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.relative_to(root).as_posix() not in client.records:
+            path.unlink()
+
+
 def get_plinder_path(
     *, rel: str = "", download: bool = True, force_progress: bool = False
 ) -> Path:
@@ -141,4 +155,6 @@ def get_plinder_path(
         [remote] if remote.is_file() else [p for p in remote.rglob("*") if p.is_file()]
     )
     _download(client, [root / client.key(p) for p in files], force_progress)
+    if not remote.is_file():
+        _prune_unpublished(client, local)
     return local

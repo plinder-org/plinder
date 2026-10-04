@@ -206,6 +206,20 @@ def test_resolve_custom_scoring_assets_includes_monomer_targets(tmp_path):
     )
 
 
+def test_resolve_custom_scoring_assets_skips_missing_monomer_targets(tmp_path):
+    _write_index(tmp_path)
+    for backend in custom.SEARCH_BACKENDS:
+        _write_search_bundle(tmp_path / "search_databases" / f"holo_{backend}", backend)
+    _write_search_bundle(tmp_path / "search_databases" / "monomer_mmseqs", "mmseqs")
+
+    assets = custom.resolve_custom_scoring_assets(
+        data_dir=tmp_path, include_monomers=True
+    )
+
+    assert set(assets.search_databases) == set(custom.SEARCH_BACKENDS)
+    assert set(assets.monomer_search_databases) == {"mmseqs"}
+
+
 def test_remote_resolution_requests_only_bounded_assets(tmp_path, monkeypatch):
     _write_index(tmp_path)
     for backend in custom.SEARCH_BACKENDS:

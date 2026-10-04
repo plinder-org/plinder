@@ -341,14 +341,15 @@ def resolve_custom_scoring_assets(
         backend: resolve_search_database(backend, data_dir=data_dir)
         for backend in selected_backends
     }
-    monomer_databases = (
-        {
-            backend: resolve_search_database(backend, data_dir=data_dir, monomer=True)
-            for backend in selected_backends
-        }
-        if include_monomers
-        else {}
-    )
+    monomer_databases = {}
+    for backend in selected_backends if include_monomers else ():
+        try:
+            monomer_databases[backend] = resolve_search_database(
+                backend, data_dir=data_dir, monomer=True
+            )
+        except FileNotFoundError as exc:
+            # A release or ingest may have no monomer universe for a backend.
+            LOG.warning(f"no {backend} monomer search database; skipping: {exc}")
     release = PlinderRelease(data_dir)
     overlay_databases = {}
     overlay_monomer_databases = {}
@@ -1161,7 +1162,7 @@ def _build_mmseqs_target_subset(
         "chain_is_interface"
     ].eq(True)
     selected_chains = (
-        ~scoreable & ~chains["chain_is_ligand_like"].fillna(False)
+        ~scoreable & ~chains["chain_is_ligand_like"].fillna(False).astype(bool)
         if monomer_only
         else scoreable
     )

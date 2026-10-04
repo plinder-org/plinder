@@ -32,6 +32,8 @@ _SEARCH_DATABASES = (
     "monomer_mmseqs",
     "monomer_foldseek",
 )
+# Monomer artifacts exist only when the ingest had monomer chains to search.
+_OPTIONAL = {"monomer_similarity_scores", "monomer_mmseqs", "monomer_foldseek"}
 
 
 def _public_files(source: Path) -> list[Path]:
@@ -39,6 +41,8 @@ def _public_files(source: Path) -> list[Path]:
     for name in _PARQUET_DIRECTORIES:
         directory = source / RELEASE_PATHS.get(name, name)
         if not directory.is_dir():
+            if name in _OPTIONAL:
+                continue
             raise FileNotFoundError(directory)
         files.update(path.relative_to(source) for path in directory.rglob("*.parquet"))
     for name in _SAMPLING_DIRECTORIES:
@@ -55,6 +59,8 @@ def _public_files(source: Path) -> list[Path]:
     for name in _SEARCH_DATABASES:
         directory = database_root / name
         if not directory.is_dir():
+            if name in _OPTIONAL:
+                continue
             raise FileNotFoundError(directory)
         files.update(
             path.relative_to(source)

@@ -305,3 +305,46 @@ def test_make_sub_dbs_builds_complete_backend_in_scratch(tmp_path, monkeypatch):
     assert (target / "exact_cluster.json").is_file()
     assert original_missing.read_text() == '{"old": true}\n'
     assert not os.path.samefile(original_missing, db_dir / "missing.json")
+
+
+def test_make_sub_dbs_retires_monomer_db_when_selection_becomes_empty(
+    tmp_path, monkeypatch
+):
+    full_db = tmp_path / "full" / "mmseqs"
+    full_db.parent.mkdir()
+    full_db.with_suffix(".lookup").write_text("0 1abc_A 0\n")
+    db_dir = tmp_path / "subdbs"
+    db_dir.mkdir()
+    clustered: list[str] = []
+
+    def fake_make_sub_db(ids, _full_db, subdb, _aln_type, *, portable):
+        database = subdb / subdb.name
+        _touch_database(database)
+        database.with_suffix(".index").write_text("".join(f"{i}\t0\t1\n" for i in ids))
+        return []
+
+    def fake_make_exact_search_db(*, full_db, **_kwargs):
+        clustered.append(full_db.name)
+        (full_db.parent / "exact_cluster.json").write_text("{}")
+        return {"status": "complete"}
+
+    monkeypatch.setattr(databases, "make_sub_db", fake_make_sub_db)
+    monkeypatch.setattr(databases, "make_exact_search_db", fake_make_exact_search_db)
+    monkeypatch.setattr(
+        databases, "_completed_exact_search_manifest", lambda *_args: None
+    )
+    target = db_dir / "monomer_mmseqs"
+    for identifiers in ({"1abc_A"}, set()):
+        databases.make_sub_dbs(
+            db_dir,
+            {"monomer_mmseqs": full_db},
+            identifiers_by_database={"monomer_mmseqs": identifiers},
+            tmp_dir=tmp_path / "scratch",
+        )
+        if identifiers:
+            assert (target / "exact_cluster.json").is_file()
+
+    assert clustered == ["monomer_mmseqs"]
+    assert not (target / "exact_cluster.json").exists()
+    assert not (target / "selection.json").exists()
+    assert not list(target.glob("monomer_mmseqs*"))

@@ -67,6 +67,24 @@ def test_public_release_contains_only_reader_artifacts(tmp_path: Path) -> None:
         assert not (directory / "directed_set_cover/reductions").exists()
 
 
+def test_public_release_allows_an_empty_monomer_universe(tmp_path: Path) -> None:
+    working = tmp_path / "working"
+    _working_release(working)
+    for name in ("monomer_mmseqs", "monomer_foldseek"):
+        for path in sorted((working / "search_databases" / name).iterdir()):
+            path.unlink()
+        (working / "search_databases" / name).rmdir()
+    monomer_scores = working / RELEASE_PATHS["monomer_similarity_scores"]
+    for path in monomer_scores.iterdir():
+        path.unlink()
+    monomer_scores.rmdir()
+
+    prepare_public_release(working, tmp_path / "public")
+
+    assert (tmp_path / "public/search_databases/holo_mmseqs/db").is_file()
+    assert not (tmp_path / "public/search_databases/monomer_mmseqs").exists()
+
+
 def test_public_release_replacement_drops_old_files(tmp_path: Path) -> None:
     working = tmp_path / "working"
     public = tmp_path / "public"

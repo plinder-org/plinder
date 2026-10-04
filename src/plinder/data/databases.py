@@ -818,7 +818,18 @@ def make_sub_dbs(
             ):
                 # linclust crashes on an empty database. An empty monomer
                 # universe is not an error: downstream bundling skips it.
+                # Retire any earlier build so it is not published as current.
                 LOG.info(f"no {search_db_aln_type} chains selected; skipping")
+                for stale in ("exact_cluster.json", "selection.json"):
+                    (subdb / stale).unlink(missing_ok=True)
+                for prefix in (
+                    subdb.name,
+                    "exact_clusters",
+                    "representatives",
+                    "cluster_alignments",
+                    "clustered",
+                ):
+                    _remove_database_prefix(subdb / prefix)
                 report[search_db_aln_type] = missing
                 continue
             cluster_manifest = make_exact_search_db(

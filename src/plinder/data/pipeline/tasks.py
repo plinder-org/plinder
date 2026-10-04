@@ -1874,7 +1874,7 @@ def _monomer_scoring_chains(data_dir: Path) -> pd.DataFrame:
     )
     chains = chains.loc[
         chains["chain_receptor_type"].eq("protein")
-        & ~chains["chain_is_ligand_like"].fillna(False)
+        & ~chains["chain_is_ligand_like"].fillna(False).astype(bool)
         & chains["chain_auth_id"].notna()
     ]
     holo = _protein_scoring_chains(data_dir)[["entry_pdb_id", "chain_asym_id"]]

@@ -73,6 +73,24 @@ def test_directory_download_and_truncated_cache_repair(mirror):
     assert not (Path(cfg.data.plinder_dir) / "systems/ab.zip").exists()
 
 
+def test_directory_download_prunes_parquet_files_the_release_dropped(mirror):
+    cfg, _ = mirror
+    cache = Path(cfg.data.plinder_dir)
+    stale = cache / "scores/old.parquet"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"stale")
+    (cache / "scores/notes.txt").write_text("kept")
+    elsewhere = cache / "other/x.parquet"
+    elsewhere.parent.mkdir()
+    elsewhere.write_bytes(b"kept")
+
+    path = cpl.get_plinder_path(rel="scores")
+
+    assert sorted(p.name for p in path.glob("*.parquet")) == ["a.parquet", "b.parquet"]
+    assert (path / "notes.txt").read_text() == "kept"
+    assert elsewhere.read_bytes() == b"kept"
+
+
 def test_small_batch_failure_propagates(mirror):
     cfg, origin = mirror
     (origin / "systems/ab.zip").write_bytes(b"corrupt")

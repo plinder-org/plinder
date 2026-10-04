@@ -24,7 +24,7 @@ def build(inventory: Path, destination: Path, release: str) -> int:
                 if not r["name"].startswith(prefix):
                     raise ValueError("Unexpected release")
                 key = r["name"][len(prefix) :]
-                if key.endswith("/"):
+                if not key or key.endswith("/"):
                     continue
                 if (
                     not key
@@ -48,6 +48,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inventory", type=Path)
     parser.add_argument("destination", type=Path)
-    parser.add_argument("release", help="release stamp, e.g. 2026-09")
+    parser.add_argument(
+        "release",
+        help="object-name prefix of the release in the inventory, "
+        "e.g. 2026-09 or PLINDER-2026-09",
+    )
     args = parser.parse_args()
     print(build(args.inventory, args.destination, args.release))
