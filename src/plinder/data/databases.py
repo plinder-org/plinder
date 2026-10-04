@@ -812,6 +812,15 @@ def make_sub_dbs(
                 )
             )
             working_database = working_subdb / working_subdb.name
+            if search_db_aln_type.startswith("monomer_") and not (
+                working_database.with_suffix(".index").is_file()
+                and _database_entry_count(working_database)
+            ):
+                # linclust crashes on an empty database. An empty monomer
+                # universe is not an error: downstream bundling skips it.
+                LOG.info(f"no {search_db_aln_type} chains selected; skipping")
+                report[search_db_aln_type] = missing
+                continue
             cluster_manifest = make_exact_search_db(
                 full_db=working_database,
                 aln_type=aln_type,
