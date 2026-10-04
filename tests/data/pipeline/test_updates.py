@@ -117,6 +117,25 @@ def test_plan_classifies_entries_and_both_search_directions(inputs, tmp_path):
     assert before == _bytes(inputs["data_dir"])
 
 
+def test_plan_refreshes_unchanged_entry_without_new_revision(inputs, tmp_path):
+    output = tmp_path / "refresh_plan"
+    plan = updates.plan_update(
+        **inputs,
+        output_dir=output,
+        pdb_ids=["1abc"],
+        refresh_pdb_ids=["1ABC"],
+    )
+    assert plan["status"] == "ready"
+    assert plan["refresh_pdb_ids"] == ["1abc"]
+    assert load_manifest(output / "ingest.txt") == ["1abc"]
+    assert load_manifest(output / "invalidate.txt") == ["1abc"]
+    row = pd.read_parquet(output / "entries.parquet").iloc[0]
+    assert row.action == "revised"
+    assert row.reason == "annotation refresh"
+    assert row.previous_major_revision == row.current_major_revision == 1
+    assert row.previous_minor_revision == row.current_minor_revision == 0
+
+
 def test_obsolete_preserves_multiple_successors_and_withdrawals(tmp_path):
     path = tmp_path / "obsolete.dat"
     path.write_text(

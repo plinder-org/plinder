@@ -1377,3 +1377,69 @@ def test_drop_self_clashing_symmetry_copies_keeps_lowest_and_distant_copies():
     assert sorted(set(kept.sym_id[kept.label_asym_id == "L"])) == [0, 2, 3]
     assert sorted(set(kept.sym_id[kept.label_asym_id == "P"])) == [0, 2]
     assert drop_self_clashing_symmetry_copies(kept) is kept
+
+
+def test_drop_overlapping_protein_chains_with_distinct_asym_ids():
+    import biotite.structure as struc
+
+    from plinder.data.annotations.cif_utils import drop_self_clashing_symmetry_copies
+
+    base = np.column_stack((np.arange(20) * 3.8, np.zeros(20), np.zeros(20)))
+    partial = base.copy()
+    partial[8:, 1] = 10.0
+    isolated_errors = base.copy()
+    isolated_errors[3:, 1] = 15.0
+    split_contacts = base.copy()
+    split_contacts[3:6, 1] = 4.5
+    split_contacts[6:, 1] = 30.0
+    blocks = [
+        ("A", base),
+        ("B", base.copy()),  # identical protein, but a different source asym ID
+        ("C", partial),  # eight clashing C-alpha atoms out of twenty
+        ("D", base + np.array([0.0, 4.5, 0.0])),  # plausible close contact
+        ("E", base + np.array([0.0, 20.0, 0.0])),
+        ("F", isolated_errors),  # three collisions do not remove a whole chain
+        ("G", split_contacts),  # six collisions across two other chains
+    ]
+    atoms = struc.AtomArray(20 * len(blocks))
+    atoms.coord = np.concatenate([coord for _, coord in blocks]).astype(np.float32)
+    atoms.set_annotation("label_asym_id", np.repeat([asym for asym, _ in blocks], 20))
+    atoms.set_annotation("sym_id", np.zeros(len(atoms), dtype=int))
+    atoms.chain_id = atoms.label_asym_id.copy()
+    atoms.atom_name = np.repeat("CA", len(atoms))
+    atoms.element = np.repeat("C", len(atoms))
+    atoms.res_name = np.repeat("ALA", len(atoms))
+    atoms.res_id = np.tile(np.arange(1, 21), len(blocks))
+    atoms.hetero = np.zeros(len(atoms), dtype=bool)
+
+    kept = drop_self_clashing_symmetry_copies(atoms)
+
+    assert set(kept.label_asym_id) == {"A", "D", "E", "F"}
+    assert drop_self_clashing_symmetry_copies(kept) is kept
+
+
+def test_drop_long_protein_chain_with_many_absolute_ca_clashes():
+    import biotite.structure as struc
+
+    from plinder.data.annotations.cif_utils import drop_self_clashing_symmetry_copies
+
+    base = np.column_stack((np.arange(300) * 3.8, np.zeros(300), np.zeros(300)))
+    twenty_clashes = base.copy()
+    twenty_clashes[20:, 1] = 10.0
+    nineteen_clashes = base.copy()
+    nineteen_clashes[19:, 1] = 20.0
+    blocks = [("A", base), ("B", twenty_clashes), ("C", nineteen_clashes)]
+    atoms = struc.AtomArray(300 * len(blocks))
+    atoms.coord = np.concatenate([coords for _, coords in blocks]).astype(np.float32)
+    atoms.set_annotation("label_asym_id", np.repeat([name for name, _ in blocks], 300))
+    atoms.set_annotation("sym_id", np.zeros(len(atoms), dtype=int))
+    atoms.chain_id = atoms.label_asym_id.copy()
+    atoms.atom_name = np.repeat("CA", len(atoms))
+    atoms.element = np.repeat("C", len(atoms))
+    atoms.res_name = np.repeat("ALA", len(atoms))
+    atoms.res_id = np.tile(np.arange(1, 301), len(blocks))
+    atoms.hetero = np.zeros(len(atoms), dtype=bool)
+
+    kept = drop_self_clashing_symmetry_copies(atoms)
+
+    assert set(kept.label_asym_id) == {"A", "C"}

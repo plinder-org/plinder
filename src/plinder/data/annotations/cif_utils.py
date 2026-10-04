@@ -766,13 +766,17 @@ def drop_self_clashing_symmetry_copies(
     clash_ratio: float = 0.5,
     context: str = "assembly",
 ) -> struc.AtomArray:
-    """Drop symmetry copies overlapping a lower ``sym_id`` copy.
+    """Drop coincident symmetry copies and severely overlapping protein chains.
 
     Chains on a symmetry axis can expand into coincident copies of one
     ``label_asym_id``. Copies are visited in ascending ``sym_id``; one is
     dropped when more than ``clash_ratio`` of its atoms lie within
     ``clash_distance`` of an already kept copy. Waters are untouched.
-    Requires the ``sym_id`` and ``label_asym_id`` annotations.
+    Protein chains from different source asym IDs are also compared by their
+    C-alpha atoms: a chain is removed if at least five and more than 10%, or
+    at least twenty regardless of chain length, lie within 2 Å of previously
+    retained protein chains. Such C-alpha distances are nonphysical for
+    separate chains. Requires the ``sym_id`` and ``label_asym_id`` annotations.
     """
     categories = set(assembly.get_annotation_categories())
     if not {"sym_id", "label_asym_id"}.issubset(categories):
@@ -815,6 +819,65 @@ def drop_self_clashing_symmetry_copies(
                 asym_id,
                 [(sym_id, round(fraction, 2)) for sym_id, fraction in dropped],
             )
+    ca_indices = np.flatnonzero(
+        keep
+        & candidates
+        & (assembly.atom_name == "CA")
+        & struc.filter_amino_acids(assembly)
+    )
+    if len(ca_indices):
+        ca = assembly[ca_indices]
+        chain_names = np.array(
+            [
+                f"{int(sym_id)}.{asym_id}"
+                for sym_id, asym_id in zip(ca.sym_id, ca.label_asym_id, strict=True)
+            ]
+        )
+        unique_chains, chain_index = np.unique(chain_names, return_inverse=True)
+        chain_sizes = np.bincount(chain_index)
+        eligible = [index for index, size in enumerate(chain_sizes) if size >= 10]
+        if len(eligible) > 1:
+            cell_list = struc.CellList(ca, cell_size=3.0)
+            retained: list[int] = []
+            dropped_chains: list[tuple[str, int, float]] = []
+            for index in sorted(
+                eligible,
+                key=lambda value: (
+                    int(unique_chains[value].split(".", 1)[0]),
+                    unique_chains[value],
+                ),
+            ):
+                query_mask = chain_index == index
+                if retained:
+                    neighbors = cell_list.get_atoms(ca.coord[query_mask], radius=2.0)
+                    clashing = (
+                        (neighbors >= 0)
+                        & np.isin(chain_index[np.clip(neighbors, 0, None)], retained)
+                    ).any(axis=1)
+                    fraction = float(clashing.mean())
+                    clash_count = int(clashing.sum())
+                    if clash_count >= 20 or (clash_count >= 5 and fraction > 0.1):
+                        sym_id, asym_id = unique_chains[index].split(".", 1)
+                        keep &= ~(
+                            (assembly.sym_id == int(sym_id))
+                            & (assembly.label_asym_id == asym_id)
+                        )
+                        dropped_chains.append(
+                            (str(unique_chains[index]), clash_count, fraction)
+                        )
+                        continue
+                retained.append(index)
+            if dropped_chains:
+                LOG.info(
+                    "%s: dropped %d clashing protein chains (first 10 chain, "
+                    "C-alpha clash count, fraction): %s",
+                    context,
+                    len(dropped_chains),
+                    [
+                        (chain, count, round(fraction, 2))
+                        for chain, count, fraction in dropped_chains[:10]
+                    ],
+                )
     if keep.all():
         return assembly
     return assembly[keep]

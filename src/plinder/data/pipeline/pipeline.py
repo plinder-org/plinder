@@ -342,9 +342,12 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_sub_dbs(self) -> None:
+        search_databases = list(self.cfg.scorer.sub_databases)
+        if "holo" in search_databases:
+            search_databases.append("monomer")
         tasks.make_sub_dbs(
             data_dir=self.plinder_dir,
-            sub_databases=self.cfg.scorer.sub_databases,
+            sub_databases=search_databases,
             cpu=self.cfg.flow.make_sub_dbs_cpu,
             scratch_dir=Path(tempfile.gettempdir()) / "plinder-exact-search-dbs",
         )

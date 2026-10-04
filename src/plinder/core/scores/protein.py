@@ -39,10 +39,21 @@ def query_protein_similarity(
     columns: list[str] | None = None,
     filters: Filters = None,
     release: PlinderRelease | None = None,
+    include_monomers: bool = False,
 ) -> pd.DataFrame:
-    """Query chain-level Foldseek and MMseqs similarities in integer percent."""
-    dataset = (release or PlinderRelease()).fetch("protein_similarity_scores")
-    return read_score_table(dataset, columns=columns, filters=filters)
+    """Query chain-level Foldseek and MMseqs similarities in integer percent.
+
+    Set ``include_monomers`` to include queries from protein chains outside
+    ligand pockets and protein interfaces.
+    """
+    selected_release = release or PlinderRelease()
+    paths = [selected_release.fetch("protein_similarity_scores")]
+    if include_monomers:
+        paths.append(selected_release.fetch("monomer_similarity_scores"))
+    return pd.concat(
+        [read_score_table(path, columns=columns, filters=filters) for path in paths],
+        ignore_index=True,
+    )
 
 
 def _selected_residue_positions(

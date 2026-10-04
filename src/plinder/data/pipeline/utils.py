@@ -39,6 +39,9 @@ def get_db_sources(
     if "holo" in sub_databases or not len(sub_databases):
         dbs["holo_foldseek"] = data_dir / "dbs" / "foldseek" / "foldseek"
         dbs["holo_mmseqs"] = data_dir / "dbs" / "mmseqs" / "mmseqs"
+    if "monomer" in sub_databases:
+        dbs["monomer_foldseek"] = data_dir / "dbs" / "foldseek" / "foldseek"
+        dbs["monomer_mmseqs"] = data_dir / "dbs" / "mmseqs" / "mmseqs"
     if "apo" in sub_databases or not len(sub_databases):
         dbs["apo_foldseek"] = data_dir / "dbs" / "foldseek" / "foldseek"
         dbs["apo_mmseqs"] = data_dir / "dbs" / "mmseqs" / "mmseqs"

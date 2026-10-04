@@ -23,7 +23,6 @@ if sys.platform == "darwin":
 import networkit as nk
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 import pyarrow.parquet as pq
 from numpy.typing import NDArray
 
@@ -47,6 +46,12 @@ INTERFACE_CLUSTER_METRICS = frozenset({"interface_qcov", "interface_side_qcov"})
 INTERFACE_REPRESENTATIVES = Path("index/interface_representatives.parquet")
 INTERFACE_HALF_REPRESENTATIVES = Path("index/interface_half_representatives.parquet")
 INTERFACE_MEMBERSHIP = Path("index/interface_membership.parquet")
+
+
+def _set_slurm_memory_limit(connection: Any, share: int) -> None:
+    memory_mb = int(os.environ.get("SLURM_MEM_PER_NODE", "0"))
+    if memory_mb > 0:
+        connection.execute("SET memory_limit = ?", [f"{memory_mb * share // 5}MB"])
 
 
 def _cluster_root(data_dir: Path, entity_type: ClusterEntity) -> Path:
@@ -583,13 +588,27 @@ def prepare_symmetric_edge_plan(
     score_metrics = [
         metric for metric in selected_metrics if not is_chemical_cluster_metric(metric)
     ]
-    # One aggregation group per distinct raw-source set: interface metrics share
-    # the interface score shards, all protein/pocket metrics share the holo
-    # search scores, and each chemical metric has its own directed-edge shards
-    # (e.g. ligand_scores / mhfp6_scores).
+    # Group metrics by score source; interface exports and chemical metrics
+    # have separate sources, while protein/pocket metrics share holo scores.
     source_groups: list[tuple[str, list[str]]] = []
     if entity_type == "interface":
-        source_groups.append(("interface", selected_metrics))
+        raw_metrics: list[str] = []
+        for metric in selected_metrics:
+            export = (
+                data_dir
+                / "exports"
+                / (
+                    "interface_similarity_scores.parquet"
+                    if metric == "interface_qcov"
+                    else "interface_half_similarity_scores.parquet"
+                )
+            )
+            if export.is_file():
+                source_groups.append((f"interface_export_{metric}", [metric]))
+            else:
+                raw_metrics.append(metric)
+        if raw_metrics:
+            source_groups.append(("interface", raw_metrics))
     else:
         if score_metrics:
             source_groups.append(("score", score_metrics))
@@ -598,11 +617,19 @@ def prepare_symmetric_edge_plan(
     for kind, source_metrics in source_groups:
         if not source_metrics:
             continue
-        sources = _raw_component_score_sources(
-            data_dir=data_dir,
-            metric=source_metrics[0],
-            entity_type=entity_type,
-        )
+        if kind.startswith("interface_export_"):
+            export_name = (
+                "interface_similarity_scores.parquet"
+                if source_metrics[0] == "interface_qcov"
+                else "interface_half_similarity_scores.parquet"
+            )
+            sources = [data_dir / "exports" / export_name]
+        else:
+            sources = _raw_component_score_sources(
+                data_dir=data_dir,
+                metric=source_metrics[0],
+                entity_type=entity_type,
+            )
         if not sources:
             if entity_type != "interface":
                 raise FileNotFoundError(
@@ -792,7 +819,7 @@ def write_symmetric_edge_fragment_batch(
     read_paths: Sequence[Path] | None = None,
     entity_type: ClusterEntity = "ligand",
 ) -> dict[str, Any]:
-    """Aggregate one raw-source batch into canonical-pair hash fragments."""
+    """Write one score batch into canonical-pair hash fragments."""
     if threads < 1:
         raise ValueError("symmetric-edge threads must be positive")
     plan = load_symmetric_edge_plan(data_dir, entity_type=entity_type)
@@ -825,6 +852,7 @@ def write_symmetric_edge_fragment_batch(
     import duckdb
 
     connection = duckdb.connect()
+    _set_slurm_memory_limit(connection, 3)
     connection.sql(f"SET threads={threads}")
     temporary_root = scratch_dir / "duckdb"
     temporary_root.mkdir(exist_ok=True, parents=True)
@@ -859,6 +887,26 @@ def write_symmetric_edge_fragment_batch(
                 cast(similarity AS DOUBLE) AS similarity
             FROM read_parquet([{paths_sql}], union_by_name=true)
             WHERE cast(metric AS VARCHAR) IN ({metrics_sql})
+            """
+        )
+    elif batch["kind"] in {
+        "interface_export_interface_qcov",
+        "interface_export_interface_side_qcov",
+    }:
+        metric = metrics[0]
+        query, target = (
+            ("query_system", "target_system")
+            if metric == "interface_qcov"
+            else ("query_half_interface_id", "target_half_interface_id")
+        )
+        selected_sql = dedent(
+            f"""
+            SELECT
+                '{metric}'::VARCHAR AS metric,
+                cast({query} AS VARCHAR) AS query_node,
+                cast({target} AS VARCHAR) AS target_node,
+                cast(similarity AS DOUBLE) AS similarity
+            FROM read_parquet([{paths_sql}], union_by_name=true)
             """
         )
     else:
@@ -930,6 +978,39 @@ def write_symmetric_edge_fragment_batch(
             max(similarity) FILTER (WHERE query_node = high_node)::DOUBLE
                 AS reverse_similarity
         """
+    compact_interface_export = batch["kind"] in {
+        "interface_export_interface_qcov",
+        "interface_export_interface_side_qcov",
+    }
+    edge_rows_sql = (
+        dedent(
+            """
+            SELECT
+                metric,
+                bucket,
+                low_node,
+                high_node,
+                CASE WHEN query_node = low_node THEN similarity END
+                    AS forward_similarity,
+                CASE WHEN query_node = high_node THEN similarity END
+                    AS reverse_similarity
+            FROM bucketed
+            """
+        )
+        if compact_interface_export
+        else dedent(
+            f"""
+            SELECT
+                metric,
+                bucket,
+                low_node,
+                high_node,
+                {aggregate_sql}
+            FROM bucketed
+            GROUP BY metric, bucket, low_node, high_node
+            """
+        )
+    )
     query = dedent(
         f"""
         COPY (
@@ -955,14 +1036,7 @@ def write_symmetric_edge_fragment_batch(
                     )::INTEGER AS bucket
                 FROM canonical
             )
-            SELECT
-                metric,
-                bucket,
-                low_node,
-                high_node,
-                {aggregate_sql}
-            FROM bucketed
-            GROUP BY metric, bucket, low_node, high_node
+            {edge_rows_sql}
         ) TO '{scratch_output.as_posix()}'
         (
             FORMAT PARQUET,
@@ -1102,6 +1176,7 @@ def write_symmetric_edge_shard(
     local_output = scratch_dir / f"{metric}-{bucket:03d}.parquet"
     local_output.unlink(missing_ok=True)
     connection = duckdb.connect()
+    _set_slurm_memory_limit(connection, 3)
     connection.sql(f"SET threads={threads}")
     connection.sql(f"SET temp_directory='{scratch_dir.as_posix()}'")
     if fragments:
@@ -2983,11 +3058,12 @@ def _stage_directed_cover_edges(
     import duckdb
 
     connection = duckdb.connect()
+    _set_slurm_memory_limit(connection, 4)
     connection.sql(f"SET threads={threads}")
+    connection.sql("SET preserve_insertion_order=false")
     temporary_root.mkdir(exist_ok=True, parents=True)
     escaped_temporary_root = temporary_root.as_posix().replace("'", "''")
     connection.sql(f"SET temp_directory='{escaped_temporary_root}'")
-    connection.sql("SET preserve_insertion_order=false")
     connection.register(
         "component_labels",
         labels[[node_column, "graph_node"]],
@@ -3041,35 +3117,30 @@ def _stage_directed_cover_edges(
     )
     staged_edges.unlink(missing_ok=True)
     incoming_counts_path.unlink(missing_ok=True)
-    staged_schema = pa.schema(
-        [
-            ("query_node", pa.uint32()),
-            ("target_node", pa.uint32()),
-            ("similarity", pa.uint8()),
-        ]
-    )
     staged_rows = 0
     incoming_counts = np.zeros(len(labels), dtype=np.int64)
     stage_started = time()
-    writer = pq.ParquetWriter(
-        staged_edges,
-        staged_schema,
-        compression="zstd",
-        use_dictionary=False,
-        write_statistics=False,
-    )
     try:
-        reader = connection.execute(query).fetch_record_batch(rows_per_batch=2_000_000)
-        for batch_index, record_batch in enumerate(reader, start=1):
-            compact = (
-                pa.Table.from_batches([record_batch])
-                .select(staged_schema.names)
-                .cast(staged_schema, safe=False)
-            )
-            writer.write_table(compact, row_group_size=2_000_000)
-            staged_rows += len(record_batch)
-            target_index = compact.schema.get_field_index("target_node")
-            targets = compact.column(target_index).to_numpy(zero_copy_only=False)
+        escaped_staged_edges = staged_edges.as_posix().replace("'", "''")
+        connection.execute(
+            f"COPY ({query}) TO '{escaped_staged_edges}' "
+            "(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 2000000)"
+        )
+        previous_target = -1
+        for batch_index, batch in enumerate(
+            pq.ParquetFile(staged_edges).iter_batches(
+                batch_size=2_000_000, columns=["target_node"]
+            ),
+            start=1,
+        ):
+            targets = batch.column(0).to_numpy(zero_copy_only=False)
+            if len(targets) and (
+                int(targets[0]) < previous_target or np.any(targets[1:] < targets[:-1])
+            ):
+                raise ValueError("directed-cover edges are not target-sorted")
+            if len(targets):
+                previous_target = int(targets[-1])
+            staged_rows += len(targets)
             incoming_counts += np.bincount(targets, minlength=len(labels))
             if batch_index % 5 == 0:
                 elapsed = time() - stage_started
@@ -3084,13 +3155,11 @@ def _stage_directed_cover_edges(
                     elapsed,
                 )
     except BaseException:
-        writer.close()
         connection.close()
         staged_edges.unlink(missing_ok=True)
         incoming_counts_path.unlink(missing_ok=True)
         raise
     else:
-        writer.close()
         connection.close()
     np.save(incoming_counts_path, incoming_counts, allow_pickle=False)
     LOG.info(

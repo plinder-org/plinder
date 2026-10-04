@@ -23,6 +23,101 @@ from plinder.core.scores.entries import (
 )
 
 
+def test_custom_chain_similarity_scores_keep_each_alignment(tmp_path):
+    hits = {}
+    for backend, rows in {
+        "mmseqs": [
+            ("1abc", "A", 0.8, 0.5, 0.75, "ACDE", "ACDF"),
+            ("1abc", "A", 0.6, 0.4, 0.5, "AC-E", "ACDE"),
+        ],
+        "foldseek": [("2def", "B", 0.9, 0.8, 0.5, "AAAA", "AATA")],
+    }.items():
+        path = tmp_path / f"{backend}.parquet"
+        frame = pd.DataFrame(
+            [
+                {
+                    "sequence_id": "generated-placeholder",
+                    "query_id": "model2" if backend == "foldseek" else "model",
+                    "query_chain_id": (
+                        "model2__A" if backend == "foldseek" else "model__A"
+                    ),
+                    "structure_id": "model2" if backend == "foldseek" else "model",
+                    "query_chain_asym_id": "A",
+                    "target_entry": entry,
+                    "target_chain_asym_id": chain,
+                    "source": backend,
+                    "qcov": qcov,
+                    "tcov": tcov,
+                    "fident": fident,
+                    "qaln": qaln,
+                    "taln": taln,
+                    **({"lddt": 0.7} if backend == "foldseek" else {}),
+                }
+                for entry, chain, qcov, tcov, fident, qaln, taln in rows
+            ]
+        )
+        frame.to_parquet(path, index=False)
+        hits[backend] = path
+
+    manifest = tmp_path / "query_chains.parquet"
+    pd.DataFrame(
+        {
+            "query_id": ["model", "model2"],
+            "sequence_id": ["original-first", "original-second"],
+        }
+    ).to_parquet(manifest, index=False)
+    output = custom.write_custom_chain_similarity_scores(
+        hits,
+        output_path=tmp_path / "chain_scores.parquet",
+        chain_manifest=manifest,
+    )
+    scores = pd.read_parquet(output)
+    assert len(scores) == 3
+    assert scores["qcov"].tolist() == [80, 60, 90]
+    assert scores["fident"].tolist() == [75, 50, 50]
+    assert scores["sequence_id"].tolist() == [
+        "original-first",
+        "original-first",
+        "original-second",
+    ]
+    assert scores["lddt"].isna().tolist() == [True, True, False]
+    assert scores.iloc[2]["lddt"] == 70
+
+    empty = tmp_path / "empty.parquet"
+    pd.DataFrame().to_parquet(empty, index=False)
+    empty_output = custom.write_custom_chain_similarity_scores(
+        {"mmseqs": empty}, output_path=tmp_path / "empty_scores.parquet"
+    )
+    assert pd.read_parquet(empty_output).empty
+
+
+def test_custom_chain_similarity_scores_round_half_up(tmp_path):
+    hits = tmp_path / "hits.parquet"
+    pd.DataFrame(
+        {
+            "query_id": ["model"],
+            "query_chain_id": ["model__A"],
+            "structure_id": ["model"],
+            "query_chain_asym_id": ["A"],
+            "target_entry": ["1abc"],
+            "target_chain_asym_id": ["B"],
+            "source": ["mmseqs"],
+            "qcov": [0.625],
+            "tcov": [0.125],
+            "fident": [0.125],
+            "qaln": ["ACDE"],
+            "taln": ["ACDF"],
+        }
+    ).to_parquet(hits, index=False)
+
+    output = custom.write_custom_chain_similarity_scores(
+        {"mmseqs": hits}, output_path=tmp_path / "scores.parquet"
+    )
+
+    scores = pd.read_parquet(output)
+    assert scores.loc[0, ["qcov", "tcov", "fident"]].tolist() == [63, 13, 13]
+
+
 def _write_database_prefix(prefix: Path, *, indexed: bool = False) -> None:
     prefix.parent.mkdir(parents=True, exist_ok=True)
     prefix.with_suffix(".dbtype").write_bytes(b"db")
@@ -53,11 +148,11 @@ def _write_search_bundle(root: Path, backend: str) -> None:
             "alignment_type": backend,
             "portable": True,
             "search_target": "representatives",
-            "conversion_target": "holo_mmseqs",
+            "conversion_target": root.name,
             "cluster_alignments": "cluster_alignments",
         }
         _write_database_prefix(root / "representatives", indexed=True)
-        _write_database_prefix(root / "holo_mmseqs")
+        _write_database_prefix(root / root.name)
         _write_database_prefix(root / "cluster_alignments")
     (root / "exact_cluster.json").write_text(json.dumps(manifest))
 
@@ -93,6 +188,24 @@ def test_resolve_custom_scoring_assets_accepts_ingest_layout(tmp_path):
     assert assets.ligand_archives == {"ab": archive}
 
 
+def test_resolve_custom_scoring_assets_includes_monomer_targets(tmp_path):
+    _write_index(tmp_path)
+    for backend in custom.SEARCH_BACKENDS:
+        _write_search_bundle(tmp_path / "search_databases" / f"holo_{backend}", backend)
+        _write_search_bundle(
+            tmp_path / "search_databases" / f"monomer_{backend}", backend
+        )
+
+    assets = custom.resolve_custom_scoring_assets(
+        data_dir=tmp_path, include_monomers=True
+    )
+    assert set(assets.monomer_search_databases) == set(custom.SEARCH_BACKENDS)
+    assert (
+        assets.monomer_search_databases["mmseqs"].conversion_target.name
+        == "monomer_mmseqs"
+    )
+
+
 def test_remote_resolution_requests_only_bounded_assets(tmp_path, monkeypatch):
     _write_index(tmp_path)
     for backend in custom.SEARCH_BACKENDS:
@@ -117,7 +230,9 @@ def test_remote_resolution_requests_only_bounded_assets(tmp_path, monkeypatch):
         "index/alignment_chain_lookup.parquet",
         "search_databases/holo_foldseek",
         "search_databases/holo_mmseqs",
-        "search_databases/manifest.json",
+        "search_databases/weekly_delta/holo_foldseek",
+        "search_databases/weekly_delta/holo_mmseqs",
+        "search_databases/shadowed_entries.parquet",
         "ligand_archives/xy.parquet",
     }
     assert assets.ligand_archives == {"xy": archive}
@@ -132,15 +247,6 @@ def test_resolve_custom_scoring_assets_includes_weekly_search_overlay(tmp_path):
     pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(
         tmp_path / "search_databases/shadowed_entries.parquet", index=False
     )
-    (tmp_path / "search_databases/manifest.json").write_text(
-        json.dumps(
-            {
-                "overlays": {"mmseqs": {}},
-                "shadowed_entries": "shadowed_entries.parquet",
-            }
-        )
-    )
-
     assets = custom.resolve_custom_scoring_assets(data_dir=tmp_path)
 
     assert assets.shadowed_entries == {"1abc"}
@@ -231,34 +337,21 @@ def test_ligand_coordinates_are_not_resolved_before_targets_are_known(
     assert not any(path.startswith("ligand_archives/") for path in requested)
 
 
-def test_search_database_requires_portable_manifest(tmp_path):
+def test_search_database_does_not_require_build_manifest(tmp_path):
     root = tmp_path / "search_databases" / "holo_foldseek"
     _write_search_bundle(root, "foldseek")
-    manifest = json.loads((root / "exact_cluster.json").read_text())
-    manifest["portable"] = False
-    (root / "exact_cluster.json").write_text(json.dumps(manifest))
+    (root / "exact_cluster.json").unlink()
 
-    with pytest.raises(ValueError, match="not portable"):
-        custom.resolve_search_database("foldseek", data_dir=tmp_path)
+    bundle = custom.resolve_search_database("foldseek", data_dir=tmp_path)
+    assert bundle.search_target == root / "clustered"
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("identity", 0.9),
-        ("coverage", 0.9),
-        ("coverage_mode", 1),
-        ("compressed_search_target", True),
-    ],
-)
-def test_search_database_requires_exact_cluster_contract(tmp_path, field, value):
+def test_search_database_requires_indexed_target(tmp_path):
     root = tmp_path / "search_databases" / "holo_foldseek"
     _write_search_bundle(root, "foldseek")
-    manifest = json.loads((root / "exact_cluster.json").read_text())
-    manifest[field] = value
-    (root / "exact_cluster.json").write_text(json.dumps(manifest))
+    (root / "clustered.idx.dbtype").unlink()
 
-    with pytest.raises(ValueError, match="exact-cluster contract"):
+    with pytest.raises(FileNotFoundError, match="indexed"):
         custom.resolve_search_database("foldseek", data_dir=tmp_path)
 
 
@@ -903,6 +996,7 @@ def test_prepare_custom_score_alignments_maps_selected_residues(
         "tstart": 1,
         "qcov": 1.0,
         "fident": 1.0,
+        "cigar": "2M",
         "qaln": "AC",
         "taln": "AC",
     }
@@ -992,6 +1086,7 @@ def test_prepare_custom_protein_score_alignments_reverses_direction(
     assert result.loc[0, "target_selected_residue_numbers"].tolist() == [custom_number]
     assert result.loc[0, "selected_residue_identity_bits"] == b"\x01"
     assert result.loc[0, "fident_qcov"] == pytest.approx(0.75)
+    assert "cigar" not in result
 
 
 def test_prepare_custom_score_alignments_maps_coordinate_fasta_positions(tmp_path):

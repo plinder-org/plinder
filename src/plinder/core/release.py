@@ -70,20 +70,23 @@ RELEASE_PATHS = {
     ),
     "ligand_archives": "ligand_archives",
     "ligand_archive": "ligand_archives/{shard}.parquet",
-    "ligand_archives_manifest": "ligand_archives/manifest.json",
     "ligand_scores": "ligand_scores",
     "ligand_sampling": "ligand_sampling",
     "interface_sampling": "interface_sampling",
     "search_databases": "search_databases",
     "search_database": "search_databases/holo_{backend}",
-    "search_databases_manifest": "search_databases/manifest.json",
     "search_database_overlay": "search_databases/weekly_delta/holo_{backend}",
+    "monomer_search_database": "search_databases/monomer_{backend}",
+    "monomer_search_database_overlay": (
+        "search_databases/weekly_delta/monomer_{backend}"
+    ),
     "search_database_shadowed_entries": "search_databases/shadowed_entries.parquet",
     "protein_similarity_scores": "exports/protein_similarity_scores",
     "protein_similarity_score_shard": (
         "exports/protein_similarity_scores/alignment_type={alignment_type}/"
         "shard={shard}.parquet"
     ),
+    "monomer_similarity_scores": "exports/monomer_similarity_scores",
     "ligand_similarity_scores": "exports/ligand_similarity_scores.parquet",
     "interface_similarity_scores": "exports/interface_similarity_scores.parquet",
     "interface_half_similarity_scores": (

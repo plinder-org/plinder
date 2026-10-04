@@ -280,7 +280,7 @@ def _search_database_bundle_sources(
             f"unsafe database prefix in {source_root / 'exact_cluster.json'}"
         )
     prefixes = {value for value in values if isinstance(value, str)}
-    sources = {source_root / "exact_cluster.json"}
+    sources: set[Path] = set()
     for prefix in prefixes:
         sources.update(
             path
