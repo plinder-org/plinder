@@ -59,7 +59,7 @@ differ from the current release.
 │   ├── set_cover/metric={metric}/threshold={threshold}.parquet
 │   └── directed_set_cover/metric={metric}/threshold={threshold}.parquet
 ├── interface_sampling/
-│   └── directed_set_cover/metric=interface_qcov/threshold={threshold}.parquet
+│   └── directed_set_cover/metric={interface_qcov,interface_side_qcov}/threshold={threshold}.parquet
 ├── search_databases/
 │   ├── holo_foldseek/
 │   ├── holo_mmseqs/
@@ -296,12 +296,13 @@ in `::side=1` or `::side=2`. Use `query_interface_similarity()` or
 
 ## Representative covers
 
-- `ligand_sampling/set_cover/` contains an undirected set cover for reciprocal
-  Tanimoto similarity;
+- `ligand_sampling/set_cover/` contains undirected set covers for reciprocal
+  Tanimoto (ECFP4) and Jaccard (MHFP6) similarity;
 - `ligand_sampling/directed_set_cover/` contains directed covers for pocket,
   interaction, and pocket-weighted ligand 3D metrics;
-- `interface_sampling/directed_set_cover/` contains directed covers for protein
-  interfaces.
+- `interface_sampling/directed_set_cover/` contains directed covers for whole
+  protein interfaces (`interface_qcov`) and interface sides
+  (`interface_side_qcov`).
 
 Each metric has files named `metric={metric}/threshold={threshold}.parquet`.
 The release also includes one row per ligand in
