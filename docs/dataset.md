@@ -9,8 +9,9 @@ extracts protein-ligand systems and protein-protein interfaces from the PDB.
 
 ## Release layout
 
-PLINDER releases are identified by the month of their PDB snapshot and a
-release number within that month. The file layout is:
+PLINDER releases are identified by the month of their PDB snapshot
+(`YYYY-MM`; the current release is `2026-09`) and served from
+`https://plinderdata.org/<release-month>/`. The file layout is:
 
 :::{note}
 Historical releases remain available at `gs://plinder/2024-04/v0`,
@@ -20,57 +21,60 @@ differ from the current release.
 
 ```text
 <release-month>/
-└── <release-number>/
-    ├── index/
-    │   ├── annotation_table.parquet
-    │   ├── system_validation.parquet
-    │   ├── entry_chains.parquet
-    │   ├── entry_biounit_chains.parquet
-    │   ├── entry_metadata.parquet
-    │   ├── entry_sources.parquet
-    │   ├── interface_annotation_table.parquet
-    │   ├── alignment_chain_lookup.parquet
-    │   ├── linked_apo_structures.parquet
-    │   ├── interface_apo_structures.parquet
-    │   ├── ligand_pocket_membership.parquet
-    │   ├── ligand_pocket_representatives.parquet
-    │   ├── ligand_clusters.parquet
-    │   ├── ligand_affinity.parquet
-    │   ├── bindingdb_measurements.parquet
-    │   ├── ligand_mmp_pairs.parquet
-    │   ├── interface_half_representatives.parquet
-    │   ├── interface_membership.parquet
-    │   ├── interface_representatives.parquet
-    │   └── interface_clusters.parquet
-    ├── ligand_archives/
-    │   ├── {two_char_code}.parquet
-    │   └── manifest.json
-    ├── alignment_cigars/
-    │   └── search_db=holo/
-    │       └── alignment_type={foldseek,mmseqs}/
-    │           └── shard={two_char_code}.parquet
-    ├── ligand_scores/
-    │   └── {fragment}.parquet
-    ├── ligand_sampling/
-    │   ├── set_cover/metric={metric}/threshold={threshold}.parquet
-    │   └── directed_set_cover/metric={metric}/threshold={threshold}.parquet
-    ├── interface_sampling/
-    │   └── directed_set_cover/metric=interface_qcov/threshold={threshold}.parquet
-    ├── search_databases/
-    │   ├── holo_foldseek/
-    │   ├── holo_mmseqs/
-    │   ├── monomer_foldseek/
-    │   └── monomer_mmseqs/
-    └── exports/
-        ├── ligand_similarity_scores.parquet
-        ├── interface_similarity_scores.parquet
-        ├── interface_half_similarity_scores.parquet
-        ├── protein_similarity_scores/
-        │   └── alignment_type={foldseek,mmseqs}/
-        │       └── shard={two_char_code}.parquet
-        └── monomer_similarity_scores/
-            └── alignment_type={foldseek,mmseqs}/
-                └── monomer_{holo,monomer}_{batch}.parquet
+├── manifest.jsonl.gz
+├── index/
+│   ├── annotation_table.parquet
+│   ├── system_validation.parquet
+│   ├── entry_chains.parquet
+│   ├── entry_biounit_chains.parquet
+│   ├── entry_metadata.parquet
+│   ├── entry_sources.parquet
+│   ├── interface_annotation_table.parquet
+│   ├── alignment_chain_lookup.parquet
+│   ├── linked_apo_structures.parquet
+│   ├── interface_apo_structures.parquet
+│   ├── ligand_pocket_membership.parquet
+│   ├── ligand_pocket_residues.parquet
+│   ├── ligand_pocket_representatives.parquet
+│   ├── ligand_clusters.parquet
+│   ├── ligand_affinity.parquet
+│   ├── bindingdb_measurements.parquet
+│   ├── ligand_mmp_pairs.parquet
+│   ├── interface_half_representatives.parquet
+│   ├── interface_membership.parquet
+│   ├── interface_representatives.parquet
+│   └── interface_clusters.parquet
+├── protein_clusters/
+│   ├── sequence.parquet
+│   └── structure.parquet
+├── ligand_archives/
+│   └── {two_char_code}.parquet
+├── alignment_cigars/
+│   └── search_db={holo,apo,interface_apo}/
+│       └── alignment_type={foldseek,mmseqs}/
+│           └── shard={two_char_code}.parquet
+├── ligand_scores/
+│   └── retained.parquet
+├── ligand_sampling/
+│   ├── set_cover/metric={metric}/threshold={threshold}.parquet
+│   └── directed_set_cover/metric={metric}/threshold={threshold}.parquet
+├── interface_sampling/
+│   └── directed_set_cover/metric=interface_qcov/threshold={threshold}.parquet
+├── search_databases/
+│   ├── holo_foldseek/
+│   ├── holo_mmseqs/
+│   ├── monomer_foldseek/
+│   └── monomer_mmseqs/
+└── exports/
+    ├── ligand_similarity_scores.parquet
+    ├── interface_similarity_scores.parquet
+    ├── interface_half_similarity_scores.parquet
+    ├── protein_similarity_scores/
+    │   └── alignment_type={foldseek,mmseqs}/
+    │       └── shard={two_char_code}.parquet
+    └── monomer_similarity_scores/
+        └── alignment_type={foldseek,mmseqs}/
+            └── monomer_{holo,monomer}_{batch}.parquet
 ```
 
 `plinder_download` downloads the index and representative-cover tables by

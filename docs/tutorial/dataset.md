@@ -9,17 +9,16 @@ files, querying annotations, and reconstructing structures.
 pip install plinder
 ```
 
-The published `2024-06/v2` release downloads from Cloudflare R2
-(`https://plinderdata.org`) with checksum verification and automatic retries;
+Releases download from Cloudflare R2
+(`https://plinderdata.org/<release-month>/`) with checksum verification and automatic retries;
 no Google Cloud SDK is required. `PLINDER_MIRROR_URL` selects another HTTP(S)
 mirror serving the same release layout and manifest.
 
-A release is identified by the month of its PDB snapshot and a number within
-that month:
+A release is identified by the month of its PDB snapshot. The current release
+(`2026-09`) is the default; select another with:
 
 ```bash
-export PLINDER_RELEASE=2026-07
-export PLINDER_RELEASE_NUMBER=1
+export PLINDER_RELEASE=2026-09
 ```
 
 ## Continue with a runnable guide
