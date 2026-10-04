@@ -655,6 +655,7 @@ def make_sub_dbs(
     """
     entries = None
     identifiers_by_database: dict[str, set[str]] = {}
+    skipped: set[str] = set()
     indexed_search_databases = []
     if set(sub_databases) <= {"holo", "apo", "monomer"}:
         indexed_search_databases = list(sub_databases)
@@ -682,6 +683,12 @@ def make_sub_dbs(
                 validate="one_to_one",
             )
         chains = chains[chains["chain_auth_id"].notna()]
+        if search_db == "monomer" and chains.empty:
+            # linclust crashes on an empty database; with no monomer chains
+            # there is no monomer target universe to build.
+            LOG.info("make_sub_dbs: no monomer chains; skipping monomer databases")
+            skipped.add(search_db)
+            continue
         identifiers_by_database[f"{search_db}_foldseek"] = {
             f"pdb_0000{row.entry_pdb_id}_xyz-enrich_{row.chain_auth_id}"
             for row in chains.itertuples(index=False)
@@ -710,7 +717,11 @@ def make_sub_dbs(
     db_dir = data_dir / "dbs" / "subdbs"
     db_dir.mkdir(exist_ok=True)
     LOG.info("making sub-databases for scoring")
-    db_sources = utils.get_db_sources(data_dir=data_dir, sub_databases=sub_databases)
+    built = [search_db for search_db in sub_databases if search_db not in skipped]
+    # get_db_sources treats an empty list as "all defaults", so skip it instead.
+    db_sources = (
+        utils.get_db_sources(data_dir=data_dir, sub_databases=built) if built else {}
+    )
     if "apo" in sub_databases:
         db_sources.update(
             utils.get_db_sources(data_dir=data_dir, sub_databases=["interface_apo"])

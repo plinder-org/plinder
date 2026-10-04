@@ -189,7 +189,8 @@ def score_monomer_pairs(
             identifiers = identifiers[:pilot_queries]
         else:
             if (
-                query_batch_count is None
+                query_batch_index is None
+                or query_batch_count is None
                 or not 0 <= query_batch_index < query_batch_count
             ):
                 raise ValueError("invalid monomer query batch")
