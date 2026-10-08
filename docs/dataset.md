@@ -11,7 +11,7 @@ extracts protein-ligand systems and protein-protein interfaces from the PDB.
 
 PLINDER releases are identified by the month of their PDB snapshot
 (`YYYY-MM`; the current release is `2026-09`) and served from
-`https://plinderdata.org/<release-month>/`. The file layout is:
+`https://cameo3d.org/plinder/PLINDER-<release-month>/`. The file layout is:
 
 :::{note}
 Historical releases remain available at `gs://plinder/2024-04/v0`,
@@ -20,8 +20,7 @@ differ from the current release.
 :::
 
 ```text
-<release-month>/
-├── manifest.jsonl.gz
+PLINDER-<release-month>/
 ├── index/
 │   ├── annotation_table.parquet
 │   ├── system_validation.parquet

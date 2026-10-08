@@ -86,6 +86,6 @@ dataset
 evaluation
 api/index
 contribution/index
-migration/r2
+migration/http
 citation
 :::

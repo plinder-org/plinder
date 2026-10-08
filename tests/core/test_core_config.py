@@ -14,7 +14,8 @@ def test_get_config():
     assert cfg == {"data": asdict(ocfg), "context": asdict(ccfg)}
 
 
-def test_release_identifier_sets_local_and_remote_roots():
+def test_release_identifier_sets_local_and_remote_roots(monkeypatch):
+    monkeypatch.delenv("PLINDER_MIRROR_URL", raising=False)
     cfg = config.DataConfig(
         plinder_release="2026-07",
         plinder_release_number="1",
@@ -23,7 +24,23 @@ def test_release_identifier_sets_local_and_remote_roots():
     )
 
     assert cfg.plinder_dir == "/cache/plinder/2026-07/1"
-    assert cfg.plinder_remote == "https://plinderdata.org/2026-07/1"
+    assert cfg.plinder_remote == "https://cameo3d.org/plinder/PLINDER-2026-07/1"
+
+
+def test_default_release_uses_cameo_without_environment_overrides(monkeypatch):
+    for key in ["PLINDER_RELEASE", "PLINDER_RELEASE_NUMBER", "PLINDER_MIRROR_URL"]:
+        monkeypatch.delenv(key, raising=False)
+    cfg = config.DataConfig(plinder_mount="/cache")
+
+    assert cfg.plinder_dir == "/cache/plinder/2026-09"
+    assert cfg.plinder_remote == "https://cameo3d.org/plinder/PLINDER-2026-09"
+
+
+def test_mirror_override_uses_the_file_server_layout(monkeypatch):
+    monkeypatch.setenv("PLINDER_MIRROR_URL", "https://mirror.example/datasets/")
+    cfg = config.DataConfig(plinder_release="2026-09", plinder_release_number="")
+
+    assert cfg.plinder_remote == "https://mirror.example/datasets/PLINDER-2026-09"
 
 
 def test_get_config_passed():

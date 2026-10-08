@@ -9,10 +9,12 @@ files, querying annotations, and reconstructing structures.
 pip install plinder
 ```
 
-Releases download from Cloudflare R2
-(`https://plinderdata.org/<release-month>/`) with checksum verification and automatic retries;
-no Google Cloud SDK is required. `PLINDER_MIRROR_URL` selects another HTTP(S)
-mirror serving the same release layout and manifest.
+Releases download directly from the Cameo file server
+(`https://cameo3d.org/plinder/PLINDER-<release-month>/`) with HTTP size validation
+and automatic retries; no Google Cloud SDK is required. Server modification
+times are checked on access so data hotfixes refresh the local cache.
+`PLINDER_MIRROR_URL` selects another HTTP(S) file-server root containing
+`PLINDER-<release-month>/` directories with browsable directory indexes.
 
 A release is identified by the month of its PDB snapshot. The current release
 (`2026-09`) is the default; select another with:

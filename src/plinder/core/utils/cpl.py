@@ -1,4 +1,4 @@
-"""Public dataset access with cloudpathlib and a local immutable-release cache."""
+"""Public dataset access with cloudpathlib and a local release cache."""
 
 import os
 import re
@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from tqdm import tqdm
 
 from plinder.core.utils.config import get_config
-from plinder.core.utils.r2 import ReleaseClient, checked_key, manifest
+from plinder.core.utils.http import ReleaseClient, checked_key
 
 T = TypeVar("T")
 
@@ -40,12 +40,12 @@ def thread_pool(func: Callable[[T], None], items: Iterable[T]) -> None:
 
 def _get_client() -> ReleaseClient:
     cfg = get_config().data
-    if (
-        cfg.plinder_bucket != "plinder"
-        or cfg.plinder_release_number
-        or not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", cfg.plinder_release)
+    if cfg.plinder_release_number or not re.fullmatch(
+        r"\d{4}-(0[1-9]|1[0-2])", cfg.plinder_release
     ):
-        raise ValueError("R2 downloads support only plinder/YYYY-MM releases")
+        raise ValueError(
+            "HTTP downloads support only YYYY-MM releases without a release number"
+        )
     remote = str(cfg.plinder_remote).rstrip("/")
     url = urlsplit(remote)
     if (
@@ -56,9 +56,7 @@ def _get_client() -> ReleaseClient:
         or url.username
         or url.password
     ):
-        raise ValueError("PLINDER_MIRROR_URL must be an HTTP(S) bucket URL")
-    if cfg.force_update:
-        manifest.cache_clear()
+        raise ValueError("PLINDER_MIRROR_URL must be an HTTP(S) file-server URL")
     return ReleaseClient(remote)
 
 
@@ -68,14 +66,18 @@ def _download(client: ReleaseClient, paths: list[Path], force_progress: bool) ->
 
     def fetch(path: Path) -> None:
         key = checked_key(path.resolve().relative_to(root).as_posix())
-        if key not in client.records:
-            raise FileNotFoundError(f"File absent from release manifest: {key}")
+        remote = client.path(key)
+        if not remote.exists():
+            raise FileNotFoundError(f"File absent from release: {key}")
+        metadata = client.metadata(remote)
         if (
             cfg.force_update
             or not path.is_file()
-            or path.stat().st_size != client.records[key]["size"]
+            or path.stat().st_size != metadata.size
+            or metadata.modified is None
+            or path.stat().st_mtime != metadata.modified
         ):
-            client.path(key).download_to(path)
+            remote.download_to(path)
             if path.suffix == ".zip":
                 path.with_name(path.stem + "_done").unlink(missing_ok=True)
 
@@ -106,7 +108,7 @@ def download_paths(*, paths: list[Path], force_progress: bool = False) -> None:
         _download(_get_client(), paths, force_progress)
 
 
-def _prune_unpublished(client: ReleaseClient, directory: Path) -> None:
+def _prune_unpublished(directory: Path, published: set[str]) -> None:
     """Remove cached Parquet files that the release no longer lists.
 
     Directory artifacts are read as whole Parquet datasets, so a file dropped
@@ -116,7 +118,7 @@ def _prune_unpublished(client: ReleaseClient, directory: Path) -> None:
     for path in directory.rglob("*.parquet"):
         if path.is_symlink() or not path.is_file():
             continue
-        if path.relative_to(root).as_posix() not in client.records:
+        if path.relative_to(root).as_posix() not in published:
             path.unlink()
 
 
@@ -147,14 +149,17 @@ def get_plinder_path(
     local = root / checked_key(rel)
     if is_offline() or not download:
         return local
+    local.resolve().relative_to(root.resolve())
     client = _get_client()
     remote = client.path(rel)
     if not remote.exists():
-        raise FileNotFoundError(f"Path absent from release manifest: {rel}")
+        raise FileNotFoundError(f"Path absent from release: {rel}")
     files = (
         [remote] if remote.is_file() else [p for p in remote.rglob("*") if p.is_file()]
     )
-    _download(client, [root / client.key(p) for p in files], force_progress)
+    keys = {client.key(p) for p in files}
+    _download(client, [root / key for key in sorted(keys)], force_progress)
     if not remote.is_file():
-        _prune_unpublished(client, local)
+        local.mkdir(parents=True, exist_ok=True)
+        _prune_unpublished(local, keys)
     return local

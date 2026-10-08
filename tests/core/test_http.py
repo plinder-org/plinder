@@ -1,7 +1,4 @@
-import base64
-import gzip
-import hashlib
-import json
+import os
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -11,15 +8,14 @@ from types import SimpleNamespace
 import pytest
 
 from plinder.core.utils import cpl
-from plinder.core.utils import r2 as dataset
+from plinder.core.utils import http as dataset
 
 
 @pytest.fixture
 def mirror(tmp_path, monkeypatch):
     origin = tmp_path / "origin"
-    release = origin / "2026-09"
+    release = origin / "PLINDER-2026-09"
     release.mkdir(parents=True)
-    records = []
     for key, data in [
         ("systems/ab.zip", b"archive"),
         ("scores/a.parquet", b"one"),
@@ -28,18 +24,23 @@ def mirror(tmp_path, monkeypatch):
         path = release / key
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(data)
-        records.append(
-            {
-                "key": key,
-                "size": len(data),
-                "md5": base64.b64encode(hashlib.md5(data).digest()).decode(),
-            }
-        )
-    (release / "manifest.jsonl.gz").write_bytes(
-        gzip.compress(("\n".join(map(json.dumps, records))).encode())
-    )
+        os.utime(path, (1700000000, 1700000000))
+    requests = []
+
+    class Handler(SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_HEAD(self):
+            requests.append(("HEAD", self.path))
+            super().do_HEAD()
+
+        def do_GET(self):
+            requests.append(("GET", self.path))
+            super().do_GET()
+
     server = ThreadingHTTPServer(
-        ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(origin))
+        ("127.0.0.1", 0), partial(Handler, directory=str(origin))
     )
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -49,18 +50,18 @@ def mirror(tmp_path, monkeypatch):
             plinder_release="2026-09",
             plinder_release_number="",
             plinder_dir=str(tmp_path / "cache"),
-            plinder_remote=f"http://127.0.0.1:{server.server_port}/2026-09",
+            plinder_remote=f"http://127.0.0.1:{server.server_port}/PLINDER-2026-09",
             force_update=False,
         )
     )
     monkeypatch.setattr(cpl, "get_config", lambda: cfg)
     monkeypatch.delenv("PLINDER_OFFLINE", raising=False)
-    cpl.manifest.cache_clear()
+    cfg.requests = requests
+    monkeypatch.delenv("PLINDER_OFFLINE_MODE", raising=False)
     yield cfg, release
     server.shutdown()
     server.server_close()
     thread.join()
-    cpl.manifest.cache_clear()
 
 
 def test_directory_download_and_truncated_cache_repair(mirror):
@@ -92,10 +93,9 @@ def test_directory_download_prunes_parquet_files_the_release_dropped(mirror):
 
 
 def test_small_batch_failure_propagates(mirror):
-    cfg, origin = mirror
-    (origin / "systems/ab.zip").write_bytes(b"corrupt")
-    with pytest.raises(ValueError, match="checksum"):
-        cpl.get_plinder_path(rel="systems/ab.zip")
+    cfg, _ = mirror
+    with pytest.raises(FileNotFoundError):
+        cpl.download_paths(paths=[Path(cfg.data.plinder_dir) / "systems/missing.zip"])
     assert not (Path(cfg.data.plinder_dir) / "systems/ab.zip").exists()
 
 
@@ -128,24 +128,50 @@ def test_missing_file_fails(mirror):
         cpl.get_plinder_path(rel="missing")
 
 
-def test_cached_same_size_edit_requires_force_update(mirror, monkeypatch):
+def test_same_size_local_edit_preserving_mtime_requires_force_update(mirror):
     cfg, _ = mirror
     path = cpl.get_plinder_path(rel="scores/a.parquet")
     path.write_bytes(b"bad")
+    os.utime(path, (1700000000, 1700000000))
     assert cpl.get_plinder_path(rel="scores/a.parquet").read_bytes() == b"bad"
     cfg.data.force_update = True
     assert cpl.get_plinder_path(rel="scores/a.parquet").read_bytes() == b"one"
 
 
-def test_failed_checksum_preserves_existing_cache(mirror):
+def test_same_size_server_hotfix_is_fetched_without_force_update(mirror):
     cfg, origin = mirror
     path = cpl.get_plinder_path(rel="scores/a.parquet")
-    (origin / "scores/a.parquet").write_bytes(b"bad")
-    cfg.data.force_update = True
-    with pytest.raises(ValueError, match="checksum"):
-        cpl.get_plinder_path(rel="scores/a.parquet")
-    assert path.read_bytes() == b"one"
-    assert list(path.parent.iterdir()) == [path]
+    source = origin / "scores/a.parquet"
+    source.write_bytes(b"new")
+    os.utime(source, (1700000010, 1700000010))
+
+    assert not cfg.data.force_update
+    assert cpl.get_plinder_path(rel="scores/a.parquet").read_bytes() == b"new"
+    assert path.stat().st_mtime == source.stat().st_mtime
+
+
+def test_directory_listing_refreshes_added_and_removed_files(mirror):
+    _, origin = mirror
+    path = cpl.get_plinder_path(rel="scores")
+    (origin / "scores/a.parquet").unlink()
+    (origin / "scores/c.parquet").write_bytes(b"new")
+
+    assert cpl.get_plinder_path(rel="scores") == path
+    assert sorted(p.name for p in path.glob("*.parquet")) == ["b.parquet", "c.parquet"]
+
+
+def test_encoded_nested_paths_and_empty_directory(mirror):
+    _, origin = mirror
+    shard = origin / "alignments" / "alignment_type=mmseqs" / "shard=a b%.parquet"
+    shard.parent.mkdir(parents=True)
+    shard.write_bytes(b"data")
+    (origin / "empty").mkdir()
+
+    assert (
+        cpl.get_plinder_path(rel="alignments")
+        / shard.relative_to(origin / "alignments")
+    ).read_bytes() == b"data"
+    assert cpl.get_plinder_path(rel="empty").is_dir()
 
 
 def test_native_cloudpath_listing_and_download(mirror, tmp_path):
@@ -175,19 +201,15 @@ def test_cache_symlink_escape_is_rejected(mirror, tmp_path):
     assert not (outside / "a.parquet").exists()
 
 
-def test_force_update_fetches_manifest_once(mirror, monkeypatch):
+def test_force_update_fetches_metadata_once_per_file(mirror):
     cfg, _ = mirror
-    actual = dataset.manifest.__wrapped__
-    calls = []
-
-    def tracked(remote):
-        calls.append(remote)
-        return actual(remote)
-
-    monkeypatch.setattr(dataset, "manifest", tracked)
     cfg.data.force_update = True
     cpl.get_plinder_path(rel="scores")
-    assert len(calls) == 1
+    for name in ["a", "b"]:
+        assert (
+            cfg.requests.count(("HEAD", f"/PLINDER-2026-09/scores/{name}.parquet")) == 1
+        )
+    assert all("manifest" not in url for _, url in cfg.requests)
 
 
 def test_cached_file_is_not_read_or_transferred(mirror, monkeypatch):
@@ -211,12 +233,6 @@ def test_interrupted_native_transfer_restarts(tmp_path, monkeypatch):
     from http.server import BaseHTTPRequestHandler
 
     payload = b"abcdef" * 500000
-    row = {
-        "key": "archive.zip",
-        "size": len(payload),
-        "md5": base64.b64encode(hashlib.md5(payload).digest()).decode(),
-    }
-    listing = gzip.compress(json.dumps(row).encode())
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -225,23 +241,20 @@ def test_interrupted_native_transfer_restarts(tmp_path, monkeypatch):
 
         def do_HEAD(self):
             self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
 
         def do_GET(self):
-            if self.path.endswith("manifest.jsonl.gz"):
-                data = listing
-            else:
-                requests.append(self.headers.get("Range"))
-                data = payload
+            requests.append(self.headers.get("Range"))
             self.send_response(200)
-            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            if data is payload and len(requests) == 1:
-                self.wfile.write(data[:1500000])
+            if len(requests) == 1:
+                self.wfile.write(payload[:1500000])
                 self.wfile.flush()
                 self.connection.shutdown(socket.SHUT_WR)
             else:
-                self.wfile.write(data)
+                self.wfile.write(payload)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -258,25 +271,28 @@ def test_interrupted_native_transfer_restarts(tmp_path, monkeypatch):
         server.server_close()
 
 
-@pytest.mark.parametrize("resource", ["manifest", "object"])
 @pytest.mark.parametrize(
-    "failure", ["503", "stall_headers", "stall_body", "exhausted", "404", "malformed"]
+    "resource,failure",
+    [
+        (resource, failure)
+        for resource in ["metadata", "listing", "object"]
+        for failure in [
+            "503",
+            "stall_headers",
+            "stall_body",
+            "exhausted",
+            "404",
+            "truncated",
+        ]
+        if resource != "metadata" or failure not in {"stall_body", "truncated"}
+    ],
 )
 def test_download_recovery(tmp_path, monkeypatch, resource, failure):
     from http.server import BaseHTTPRequestHandler
     from threading import Event
-    from urllib.error import HTTPError
 
     payload = b"dataset"
-    listing = gzip.compress(
-        json.dumps(
-            {
-                "key": "data",
-                "size": len(payload),
-                "md5": base64.b64encode(hashlib.md5(payload).digest()).decode(),
-            }
-        ).encode()
-    )
+    listing = b'<title>Index of /</title><a href="data">data</a>'
     release_stall = Event()
     requests = []
     original_timeout = dataset._TimeoutHandler.http_request
@@ -294,31 +310,40 @@ def test_download_recovery(tmp_path, monkeypatch, resource, failure):
         def log_message(self, *args):
             pass
 
-        def do_HEAD(self):
-            self.send_error(503)  # Bootstrap must use GET, not hide this as missing.
-
-        def do_GET(self):
-            is_manifest = self.path.endswith("manifest.jsonl.gz")
-            selected = is_manifest == (resource == "manifest")
+        def respond(self, head=False):
+            is_listing = self.path == "/"
+            selected = (
+                head
+                if resource == "metadata"
+                else not head and is_listing == (resource == "listing")
+            )
             if selected:
                 requests.append(self.path)
-            fail = selected and (len(requests) == 1 or failure in {"404", "exhausted"})
+            fail = selected and (
+                len(requests) == 1 or failure in {"404", "exhausted", "truncated"}
+            )
             if fail and failure in {"503", "404", "exhausted"}:
                 self.send_error(503 if failure == "exhausted" else int(failure))
                 return
             if fail and failure == "stall_headers":
                 release_stall.wait(5)
                 return
-            data = listing if is_manifest else payload
-            if fail and failure == "malformed":
-                data = b"invalid"  # Same length as the object: checksum must reject it.
+            data = listing if is_listing else payload
             self.send_response(200)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
+            if head:
+                return
             if fail and failure == "stall_body":
                 release_stall.wait(5)
                 return
-            self.wfile.write(data)
+            self.wfile.write(data[:-1] if fail and failure == "truncated" else data)
+
+        def do_HEAD(self):
+            self.respond(head=True)
+
+        def do_GET(self):
+            self.respond()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -328,17 +353,20 @@ def test_download_recovery(tmp_path, monkeypatch, resource, failure):
 
     def download():
         client = dataset.ReleaseClient(f"http://127.0.0.1:{server.server_port}")
+        if resource == "listing":
+            list(client.path().iterdir())
         client.path("data").download_to(destination)
 
     try:
-        if failure in {"404", "malformed", "exhausted"}:
-            error = (
-                (ValueError, gzip.BadGzipFile) if failure == "malformed" else HTTPError
-            )
+        if failure in {"404", "exhausted", "truncated"}:
+            from cloudpathlib.exceptions import CloudPathNotExistsError
+
+            error = (OSError, dataset.HTTPException, CloudPathNotExistsError)
             with pytest.raises(error):
                 download()
-            assert len(requests) == (3 if failure == "exhausted" else 1)
+            assert len(requests) == (1 if failure == "404" else 3)
             assert destination.read_bytes() == b"existing"
+            assert list(tmp_path.iterdir()) == [destination]
         else:
             download()
             assert len(requests) == 2
@@ -348,4 +376,57 @@ def test_download_recovery(tmp_path, monkeypatch, resource, failure):
         server.shutdown()
         server.server_close()
         thread.join()
-        dataset.manifest.cache_clear()
+
+
+def test_listing_ignores_navigation_and_escaping_links(mirror, monkeypatch):
+    cfg, _ = mirror
+    client = cpl._get_client()
+    original_open = client.opener.open
+
+    def open_index(request):
+        response = original_open(request)
+        if request.full_url.endswith("/scores/"):
+            from io import BytesIO
+
+            response.read = BytesIO(
+                b"<title>Index of /scores/</title>"
+                b'<a href="../">parent</a><a href="?C=N;O=D">sort</a>'
+                b'<a href="https://example.com/file">external</a>'
+                b'<a href="/file">absolute</a><a href="%2e%2e/escape">escape</a>'
+                b'<a href="nested%2fescape">encoded escape</a>'
+                b'<a href="a.parquet">a</a><a href="b.parquet">b</a>'
+            ).read
+        return response
+
+    monkeypatch.setattr(client.opener, "open", open_index)
+    assert {p.name for p in client.path("scores").iterdir()} == {
+        "a.parquet",
+        "b.parquet",
+    }
+    assert all(
+        "escape" not in url and "example.com" not in url for _, url in cfg.requests
+    )
+
+
+def test_invalid_listing_preserves_cached_parquet(mirror, monkeypatch):
+    cfg, _ = mirror
+    path = cpl.get_plinder_path(rel="scores")
+    monkeypatch.setattr(dataset._DirectoryIndex, "handle_data", lambda *args: None)
+    with pytest.raises(ValueError, match="directory index"):
+        cpl.get_plinder_path(rel="scores")
+    assert (path / "a.parquet").read_bytes() == b"one"
+    assert (path / "b.parquet").read_bytes() == b"two"
+
+
+def test_empty_directory_cannot_prune_through_a_cache_symlink(mirror, tmp_path):
+    cfg, origin = mirror
+    (origin / "empty").mkdir()
+    root = Path(cfg.data.plinder_dir)
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "kept.parquet").write_bytes(b"kept")
+    (root / "empty").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        cpl.get_plinder_path(rel="empty")
+    assert (outside / "kept.parquet").read_bytes() == b"kept"

@@ -15,7 +15,7 @@ from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
 
-# Default public release: a YYYY-MM PDB snapshot stamp served flat on R2.
+# Default public release: a YYYY-MM PDB snapshot stamp on the Cameo file server.
 DEFAULT_RELEASE = "2026-09"
 
 
@@ -223,7 +223,8 @@ class DataConfig:
         set automatically
     plinder_remote : str
         set automatically; the release root under ``PLINDER_MIRROR_URL``
-        (default ``https://plinderdata.org``)
+        (default ``https://cameo3d.org/plinder``), in ``PLINDER-YYYY-MM``
+        directories
     """
 
     plinder_release: str = field(
@@ -257,8 +258,8 @@ class DataConfig:
         else:
             root = Path(self.plinder_mount) / self.plinder_bucket
         self.plinder_dir = (root / suffix).as_posix() if suffix else root.as_posix()
-        base = getenv("PLINDER_MIRROR_URL", "https://plinderdata.org").rstrip("/")
-        self.plinder_remote = f"{base}/{suffix}" if suffix else base
+        base = getenv("PLINDER_MIRROR_URL", "https://cameo3d.org/plinder").rstrip("/")
+        self.plinder_remote = f"{base}/PLINDER-{suffix}" if suffix else base
 
 
 @dataclass
