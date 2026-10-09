@@ -285,19 +285,28 @@ def _check_stereo_vs_template(
     """
     from plinder.core.structure.smallmols_utils import compare_stereo_to_template
 
-    # Group atoms by (resname, res_id) to handle repeated residue names
-    residue_atoms: dict[tuple[str, int], list[int]] = {}
+    residue_atoms: dict[tuple[str, int, str, str], list[int]] = {}
     for atom in resolved_mol.GetAtoms():
         info = atom.GetPDBResidueInfo()
         if info is None:
             raise ValueError(
                 f"Atom {atom.GetIdx()} in resolved mol has no PDB residue info"
             )
-        key = (info.GetResidueName().strip(), info.GetResidueNumber())
+        key = (
+            info.GetChainId(),
+            info.GetResidueNumber(),
+            info.GetInsertionCode(),
+            info.GetResidueName().strip(),
+        )
         residue_atoms.setdefault(key, []).append(atom.GetIdx())
 
     results: list[bool | None] = []
-    for (resname, res_id), atom_indices in residue_atoms.items():
+    for (
+        chain_id,
+        res_id,
+        insertion_code,
+        resname,
+    ), atom_indices in residue_atoms.items():
         frag = Chem.RWMol(resolved_mol)
         remove = [
             a.GetIdx()
@@ -335,7 +344,9 @@ def _check_stereo_vs_template(
         try:
             results.append(compare_stereo_to_template(fragment_mol, template_mol))
         except Exception as e:
-            LOG.warning(f"Stereo comparison failed for {resname}:{res_id}: {e}")
+            LOG.warning(
+                f"Stereo comparison failed for {chain_id}:{resname}:{res_id}{insertion_code}: {e}"
+            )
             results.append(None)
 
     if not results:

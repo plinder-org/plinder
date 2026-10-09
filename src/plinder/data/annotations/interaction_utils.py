@@ -560,7 +560,6 @@ def find_metal_bridges(
     coord_mask = np.isin(metals.res_name, list(_COORDINATION_METALS))
     if not np.any(coord_mask):
         return []
-    coord_metals = metals[coord_mask]
 
     try:
         cm = ContactMeasurement(receptor, ligand)
@@ -576,8 +575,8 @@ def find_metal_bridges(
         return []
 
     bridges: list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]] = []
-    for bi in range(coord_metals.array_length()):
-        b_coord = coord_metals.coord[bi]
+    for bi in np.flatnonzero(coord_mask):
+        b_coord = metals.coord[bi]
         r_dists = np.linalg.norm(
             cm._binding_site.coord[receptor_matched] - b_coord, axis=1
         )
@@ -713,9 +712,15 @@ def run_peppr_interactions(
     # Salt bridges
     try:
         salt_bridges = cm.find_salt_bridges()
+        # Use the detector's resonance-aware charges in full receptor indexing.
+        positive_atoms = set(cm._binding_site_indices[cm._binding_site_pos_mask])
         for ri, _li in salt_bridges:
             c = str(receptor.chain_id[ri])
-            _add(c, int(receptor.res_id[ri]), "type:salt_bridges__protispos:True")
+            _add(
+                c,
+                int(receptor.res_id[ri]),
+                f"type:salt_bridges__protispos:{ri in positive_atoms}",
+            )
     except Exception as e:
         log.warning(f"run_peppr_interactions: find_salt_bridges failed: {e}")
         failed_interaction_types.append("salt_bridges")

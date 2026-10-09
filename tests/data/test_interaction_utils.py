@@ -6,9 +6,84 @@ import time
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
+import pytest
+from biotite.structure import info
 from rdkit import Chem
 
 from plinder.data.annotations import cif_utils, interaction_utils
+
+
+@pytest.mark.parametrize(
+    ("receptor_name", "ligand_name", "contact_atom", "positive"),
+    [
+        ("ASP", "NH4", "OD1", False),
+        ("ASP", "NH4", "OD2", False),
+        ("LYS", "ACT", "NZ", True),
+    ],
+)
+def test_salt_bridge_polarity(receptor_name, ligand_name, contact_atom, positive):
+    receptor = info.residue(receptor_name)
+    receptor = receptor[receptor.element != "H"]
+    receptor.chain_id[:] = "R"
+    receptor.res_id[:] = 10
+    ligand = info.residue(ligand_name)
+    ligand = ligand[ligand.element != "H"]
+    ligand.chain_id[:] = "L"
+    ligand.coord += (
+        receptor.coord[receptor.atom_name == contact_atom][0]
+        - ligand.coord[0]
+        + [0, 0, 3]
+    )
+    # Binding-site indices must be translated back to the full receptor.
+    distant = receptor.copy()
+    distant.res_id[:] = 1
+    distant.coord += 100
+    receptor = distant + receptor
+
+    interactions, _, failed = interaction_utils.run_peppr_interactions(
+        receptor, ligand, struc.AtomArray(0), struc.AtomArray(0), "L"
+    )
+
+    assert "salt_bridges" not in failed
+    bridges = [s for s in interactions["R"][10] if s.startswith("type:salt_bridges")]
+    assert bridges == [f"type:salt_bridges__protispos:{positive}"]
+
+
+@pytest.mark.parametrize("elements", [["NA", "MG"], ["MG", "NA"]])
+def test_metal_bridge_indices_refer_to_original_array(elements):
+    receptor = info.residue("ASP")
+    receptor = receptor[receptor.element != "H"]
+    receptor.chain_id[:] = "R"
+    ligand = info.residue("ACT")
+    ligand = ligand[ligand.element != "H"]
+    ligand.chain_id[:] = "L"
+    center = receptor.coord[receptor.atom_name == "OD2"][0] + [0, 0, 2]
+    ligand.coord += center + [0, 0, 2] - ligand.coord[1]
+    metals = struc.AtomArray(2)
+    metals.res_name = np.array(elements)
+    metals.element = np.array(elements)
+    metals.coord[:] = [100, 100, 100]
+    metals.coord[elements.index("MG")] = center
+
+    bridges = interaction_utils.find_metal_bridges(receptor, ligand, metals)
+    assert bridges
+    assert all(
+        metal_indices.tolist() == [elements.index("MG")]
+        for _, _, metal_indices in bridges
+    )
+
+    interactions, _, failed = interaction_utils.run_peppr_interactions(
+        receptor, ligand, struc.AtomArray(0), metals, "L"
+    )
+    assert "metal_complexes" not in failed
+    labels = [
+        label
+        for labels in interactions["R"].values()
+        for label in labels
+        if label.startswith("type:metal_complexes")
+    ]
+    assert labels
+    assert set(labels) == {"type:metal_complexes__metal_type:MG"}
 
 
 def test_peppr_tautomer_cache_requires_matching_atom_order(monkeypatch) -> None:
