@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from multiprocessing import get_context
 from pathlib import Path
 from shutil import copyfile, copytree, rmtree
+from tempfile import TemporaryDirectory
 from textwrap import dedent
 from time import time
 from typing import Any, Callable, Iterable, Literal, Mapping, Sequence, TypeVar, cast
@@ -23,6 +24,7 @@ if sys.platform == "darwin":
 import networkit as nk
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 from numpy.typing import NDArray
 
@@ -382,7 +384,9 @@ def reduce_threshold_component_edges(
     if not modes:
         raise ValueError("at least one component direction mode is required")
     nodes = sorted(set(map(str, all_nodes)))
-    node_indexes = {node: index for index, node in enumerate(nodes)}
+    node_indexes = pd.Series(
+        np.arange(len(nodes), dtype=np.int64), index=pd.Index(nodes)
+    )
     accumulators = {
         directed: {
             threshold: _ComponentEdgeAccumulator(
@@ -2833,6 +2837,8 @@ def _greedy_indexed_directed_set_cover(
     best_similarity[representatives] = 100.0
 
     def assign(threshold: int, only_unassigned: bool) -> None:
+        # Freeze eligibility so later representatives can improve fallback hits.
+        eligible = best_representative < 0 if only_unassigned else ~selected
         for representative_index in representatives:
             representative = int(representative_index)
             start = int(index.offsets[representative])
@@ -2842,10 +2848,8 @@ def _greedy_indexed_directed_set_cover(
             keep = (
                 (queries != representative)
                 & (similarities >= threshold)
-                & ~selected[queries]
+                & eligible[queries]
             )
-            if only_unassigned:
-                keep &= best_representative[queries] < 0
             queries = queries[keep]
             similarities = similarities[keep]
             current_representatives = best_representative[queries]
@@ -3030,6 +3034,43 @@ def _directed_cover_labels(
     return labels
 
 
+def _write_target_sorted_edges(
+    connection: Any, query: str, staged_edges: Path, temporary_root: Path
+) -> None:
+    """Sort bounded target ranges instead of sorting the entire score graph."""
+    schema = pa.schema(
+        [
+            ("query_node", pa.uint32()),
+            ("target_node", pa.uint32()),
+            ("similarity", pa.uint8()),
+        ]
+    )
+    with TemporaryDirectory(dir=temporary_root, prefix="cover-ranges-") as directory:
+        connection.execute(
+            f"COPY (SELECT *, target_node // 65536 AS target_range FROM ({query})) "
+            "TO ? (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY(target_range), "
+            "ROW_GROUP_SIZE 2000000)",
+            [directory],
+        )
+        ranges = sorted(
+            Path(directory).glob("target_range=*"),
+            key=lambda path: int(path.name.split("=")[1]),
+        )
+        with pq.ParquetWriter(staged_edges, schema, compression="zstd") as writer:
+            for index, partition in enumerate(ranges, start=1):
+                batches = connection.execute(
+                    "SELECT query_node,target_node,similarity FROM read_parquet(?) "
+                    "ORDER BY target_node,query_node",
+                    [str(partition / "*.parquet")],
+                ).fetch_record_batch(2_000_000)
+                for batch in batches:
+                    writer.write_batch(batch)
+                rmtree(partition)
+                LOG.info(
+                    "directed cover sorted target ranges: %d/%d", index, len(ranges)
+                )
+
+
 def _stage_directed_cover_edges(
     *,
     data_dir: Path,
@@ -3103,7 +3144,6 @@ def _stage_directed_cover_edges(
             target_node,
             similarity
         FROM labeled
-        ORDER BY target_node, query_node
         """
     )
     LOG.info(
@@ -3121,11 +3161,7 @@ def _stage_directed_cover_edges(
     incoming_counts = np.zeros(len(labels), dtype=np.int64)
     stage_started = time()
     try:
-        escaped_staged_edges = staged_edges.as_posix().replace("'", "''")
-        connection.execute(
-            f"COPY ({query}) TO '{escaped_staged_edges}' "
-            "(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 2000000)"
-        )
+        _write_target_sorted_edges(connection, query, staged_edges, temporary_root)
         previous_target = -1
         for batch_index, batch in enumerate(
             pq.ParquetFile(staged_edges).iter_batches(
