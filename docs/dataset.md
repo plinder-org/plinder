@@ -204,7 +204,10 @@ revision recorded in `entry_sources.parquet` is fetched from the
 [wwPDB versioned archive](https://www.wwpdb.org/ftp/pdb-versioned-ftp-site) and
 cached separately from the bulk release. Source PDB mmCIFs are therefore not
 included by `plinder_download`; `download_pdb_mmcifs()` can prefetch selected
-source revisions for offline reconstruction.
+source revisions for offline reconstruction. If the exact minor revision is
+unavailable, PLINDER uses the latest minor revision within the same major
+version. wwPDB increments the major version when coordinates, polymer sequences,
+or chemical identities change.
 
 The reconstructed mmCIFs contain the atom, sequence, component, assembly, and
 bond information needed to read them as self-contained PDBx/mmCIF files.
