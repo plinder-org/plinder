@@ -42,7 +42,9 @@ def calculate_interface_side_scores(
     its best single alignment per interface side and custom chain; alignments
     are never combined to inflate coverage.
     """
-    sides = defaultdict(list)
+    sides: defaultdict[tuple[str, str], list[tuple[str, str, str, frozenset[int]]]] = (
+        defaultdict(list)
+    )
     for interface in interfaces.values():
         for chain, partner, residues in (
             (
@@ -60,7 +62,9 @@ def calculate_interface_side_scores(
                 sides[(interface.pdb_id, chain.split(".", 1)[-1])].append(
                     (interface.id, chain, partner, frozenset(residues))
                 )
-    best = {}
+    best: dict[
+        tuple[str, str, str, str, str], tuple[tuple[int, int], dict[str, object]]
+    ] = {}
     for row in alignments.itertuples(index=False):
         matching = sides.get((str(row.query_entry), str(row.query_chain_mapped)), [])
         if not matching:
@@ -77,8 +81,8 @@ def calculate_interface_side_scores(
             )
             if int(custom_number) > 0
         }
-        for interface_id, chain, partner, residues in matching:
-            numbers = sorted(residues.intersection(pairs))
+        for interface_id, chain, partner, side_residues in matching:
+            numbers = sorted(side_residues.intersection(pairs))
             if not numbers:
                 continue
             identical_count = sum(pairs[number][1] for number in numbers)
@@ -90,15 +94,22 @@ def calculate_interface_side_scores(
                 str(row.source),
             )
             rank = (len(numbers), identical_count)
-            record = dict(zip(INTERFACE_SIDE_COLUMNS[:4], key[:4], strict=True))
-            record.update(
-                plinder_partner_chain=partner,
-                source=key[4],
-                interface_side_qcov=int(100 * len(numbers) / len(residues) + 0.5),
-                interface_side_fident=int(100 * identical_count / len(residues) + 0.5),
-                plinder_residue_numbers=numbers,
-                custom_residue_numbers=[pairs[number][0] for number in numbers],
-            )
+            record: dict[str, object] = {
+                "custom_structure_id": key[0],
+                "custom_chain": key[1],
+                "plinder_interface_id": interface_id,
+                "plinder_chain": chain,
+                "plinder_partner_chain": partner,
+                "source": key[4],
+                "interface_side_qcov": int(
+                    100 * len(numbers) / len(side_residues) + 0.5
+                ),
+                "interface_side_fident": int(
+                    100 * identical_count / len(side_residues) + 0.5
+                ),
+                "plinder_residue_numbers": numbers,
+                "custom_residue_numbers": [pairs[number][0] for number in numbers],
+            }
             if key not in best or rank > best[key][0]:
                 best[key] = (rank, record)
     result = pd.DataFrame(
