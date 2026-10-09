@@ -10,7 +10,6 @@ Start here when working directly with the release tables and files.
 ```{toctree}
 :maxdepth: 1
 
-1_download
 2_query_filter_index
 ```
 
@@ -47,4 +46,14 @@ Compare predicted ligand poses and protein interfaces with known references.
 :maxdepth: 1
 
 evaluation
+```
+
+## Offline access
+
+Download a local copy when you need to work without internet access.
+
+```{toctree}
+:maxdepth: 1
+
+1_download
 ```

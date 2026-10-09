@@ -195,3 +195,6 @@ tmp_foldseek
 tmp_mmseqs
 artifacts
 logs/
+
+# uv lockfile: not committed; CI resolves the latest versions allowed by pyproject.toml
+uv.lock

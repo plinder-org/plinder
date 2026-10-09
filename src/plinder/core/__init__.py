@@ -4,10 +4,11 @@
 The plinder.core package collects useful functions and classes for interacting
 with the PLINDER dataset. It manages app configuration and will automatically
 download (and / or sync) the dataset to a local cache in a lazy manner, when
-particular assets are requested. Downloads are checked against the release
-manifest for size and MD5 before replacing a local file. Cached files with the
-expected size are reused without rehashing; force a refresh to repair same-size
-local corruption.
+particular assets are requested. Downloads come directly from the Cameo file
+server and are checked against HTTP Content-Length before replacing a local
+file. Cached files with matching size and Last-Modified time are reused; server
+hotfixes are fetched on the next access. Force a refresh to repair local
+corruption that preserves both size and modification time.
 
 Note
 ----

@@ -3417,7 +3417,6 @@ def publish_search_database_bundles(
             rmtree(path)
     staging.mkdir(parents=True)
     reports: dict[str, dict[str, int | str]] = {}
-    overlay_reports: dict[str, dict[str, int | str]] = {}
     try:
         for alignment_type in alignment_types:
             reports[alignment_type] = databases.publish_search_database_bundle(
@@ -3425,31 +3424,25 @@ def publish_search_database_bundles(
                 target_root=staging / f"holo_{alignment_type}",
                 aln_type=alignment_type,
             )
+            monomer_source = data_dir / "dbs" / "subdbs" / f"monomer_{alignment_type}"
+            if (monomer_source / "exact_cluster.json").is_file():
+                databases.publish_search_database_bundle(
+                    source_root=monomer_source,
+                    target_root=staging / f"monomer_{alignment_type}",
+                    aln_type=alignment_type,
+                )
             overlay_source = (
                 data_dir / "dbs/weekly_delta/subdbs" / f"holo_{alignment_type}"
             )
             if (overlay_source / "exact_cluster.json").is_file():
-                overlay_reports[alignment_type] = (
-                    databases.publish_search_database_bundle(
-                        source_root=overlay_source,
-                        target_root=staging / "weekly_delta" / f"holo_{alignment_type}",
-                        aln_type=alignment_type,
-                    )
+                databases.publish_search_database_bundle(
+                    source_root=overlay_source,
+                    target_root=staging / "weekly_delta" / f"holo_{alignment_type}",
+                    aln_type=alignment_type,
                 )
         shadowed = data_dir / "manifests/weekly_shadowed_entries.parquet"
         if shadowed.is_file():
             copyfile(shadowed, staging / "shadowed_entries.parquet")
-        write_json_atomic(
-            staging / "manifest.json",
-            {
-                "status": "complete",
-                "bundles": reports,
-                "overlays": overlay_reports,
-                "shadowed_entries": (
-                    "shadowed_entries.parquet" if shadowed.is_file() else None
-                ),
-            },
-        )
         if output.exists():
             output.rename(backup)
         staging.rename(output)
@@ -7571,7 +7564,7 @@ def main() -> None:
     elif args.command == "make-sub-dbs":
         tasks.make_sub_dbs(
             data_dir=data_dir,
-            sub_databases=args.search_dbs or ["holo"],
+            sub_databases=args.search_dbs or ["holo", "monomer"],
             cpu=args.threads,
             scratch_dir=args.scratch_dir.resolve(),
         )

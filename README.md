@@ -43,10 +43,9 @@ More details about the competition and other helpful practical tips can be found
 
 ## 🔢 Plinder versions
 
-We version the `plinder` dataset with two controls:
-
-- `PLINDER_RELEASE`: the month stamp of the last RCSB sync
-- `PLINDER_RELEASE_NUMBER`: numbered release within that ingest month
+We version the `plinder` dataset by the month stamp (`YYYY-MM`) of the RCSB
+sync it was built from, set with `PLINDER_RELEASE`. The current release,
+`2026-09`, is the default.
 
 We version the `plinder` application using an automated semantic
 versioning scheme based on the `git` commit history.
@@ -57,7 +56,7 @@ with the dataset.
 #### Changelog:
 
 - WIP (Current — unreleased):
-    - **Public downloads on Cloudflare R2**: `2024-06/v2` now downloads from `https://plinderdata.org` instead of GCS; `PLINDER_MIRROR_URL` selects another HTTP mirror. Downloads stream to disk and verify size and MD5 before atomic replacement, interrupted transfers retry from the start, and cached files with the expected size are reused (force a refresh to repair same-size local corruption). Google storage dependencies are now optional: install `plinder[data]` for the GCS data-generation utilities.
+    - **Public downloads from Cameo**: releases download directly from `https://cameo3d.org/plinder/PLINDER-<YYYY-MM>/` (currently `2026-09`); `PLINDER_MIRROR_URL` selects another HTTP file server with the same directory layout. Downloads stream to disk, validate HTTP Content-Length, and replace cached files atomically. Interrupted transfers retry from the start. Cached files are reused when their size and Last-Modified time match the server, so data hotfixes are fetched on the next access. Google storage dependencies are optional: install `plinder[data]` for the GCS data-generation utilities.
     - **Major backend refactor**: replaced OST, gemmi, plip, openbabel with biotite + peppr for data generation; removed 6 dependencies from ingest pipeline
     - **Nucleic acid support**: DNA/RNA chains now correctly included as receptor neighbors, mainchain/sidechain detection works for both protein and nucleic acids ([#61](https://github.com/plinder-org/plinder/issues/61))
     - **Custom CIF support**: new `Entry.from_custom_cif_file` for structure-prediction outputs (Boltz, AlphaFold3, Chai-1) that ship CIFs without `_chem_comp_bond` ([#117](https://github.com/plinder-org/plinder/issues/117)). Bond orders come from `ligand_smiles_dict` via positional atom-order match (the convention these tools follow); element/count mismatches raise with the offending position, `force_substructure_match=True` opts into substructure matching when atom order isn't preserved. User SMILES win over CCD for both `smiles` and `resolved_stereo_matches_template` — closes a silent gap where biotite's `LIG` placeholder would pass any 3D conformer. Input CIFs are never mutated; optional `save_fixed_cif` persists the enriched copy.
@@ -108,7 +107,7 @@ Moreover, as we enticipate this resource to be used for benchmarking a wide rang
 The *PLINDER* dataset is provided in two ways:
 
 - You can either use the files from the dataset directly using your preferred tooling
-  by downloading the data from `https://plinderdata.org` (Cloudflare R2),
+  by downloading the data from the [Cameo file server](https://cameo3d.org/plinder/PLINDER-2026-09/),
 - or you can utilize the dedicated `plinder` Python package for interfacing the data.
 
 
@@ -118,14 +117,15 @@ After installing the package, download the index tables and cluster assignments
 for a release with:
 
 ```console
-$ plinder_download --release 2024-06 --release-number v2
+$ plinder_download --release 2026-09
 ```
 
 The command offers the larger ligand, alignment, score, export, and search
 database groups separately, and dataset APIs also download required files
-lazily. No Google Cloud credentials or SDK are needed: `2024-06/v2` downloads
-from `https://plinderdata.org`; `PLINDER_MIRROR_URL` can select another HTTP
-mirror. Other release versions are unavailable through the public downloader.
+lazily. No Google Cloud credentials or SDK are needed: releases download
+from `https://cameo3d.org/plinder/PLINDER-2026-09/`; `PLINDER_MIRROR_URL`
+can select another HTTP file-server root containing `PLINDER-<YYYY-MM>/`
+directories. The legacy `2024-06/v2` layout requires an earlier `plinder` version.
 For details on the release paths, see [Documentation](https://plinder-org.github.io/plinder/tutorial/dataset.html).
 
 ## Installing the Python package

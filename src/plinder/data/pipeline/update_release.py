@@ -12,6 +12,7 @@ import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import replace
+from itertools import groupby
 from multiprocessing import get_context
 from pathlib import Path
 from shutil import copyfile, rmtree
@@ -33,7 +34,7 @@ from plinder.core.utils.files import (
     write_json_atomic,
 )
 from plinder.data import clusters, databases
-from plinder.data.annotations import get_similarity_scores
+from plinder.data.annotations import ccd_ligand_dbs, get_similarity_scores
 from plinder.data.pipeline import config, score, tasks, utils
 from plinder.data.pipeline.update_archives import update_ligand_archives
 from plinder.data.pipeline.update_entries import apply_entry_update
@@ -297,25 +298,19 @@ def _queries_with_old_target_hits(
     ]
     if not paths:
         return set()
-    connection = duckdb.connect()
-    try:
-        connection.register(
-            "affected_targets",
-            pd.DataFrame({"target_entry": sorted(affected)}),
-        )
-        sources = ", ".join(
-            f"'{path.as_posix().replace(chr(39), chr(39) * 2)}'" for path in paths
-        )
-        hits = connection.sql(
-            f"""
-            SELECT DISTINCT query_entry
-            FROM read_parquet([{sources}], union_by_name=true) AS alignments
-            INNER JOIN affected_targets USING (target_entry)
-            """
-        ).df()
-    finally:
-        connection.close()
-    return set(hits["query_entry"].dropna().astype(str))
+    target_ids = pa.array(sorted(affected), type=pa.string())
+    hits: set[str] = set()
+    for path in paths:
+        for batch in pq.ParquetFile(path).iter_batches(
+            columns=["query_entry", "target_entry"], batch_size=131_072
+        ):
+            mask = pc.is_in(batch.column("target_entry"), value_set=target_ids)
+            if pc.any(mask).as_py():
+                matches = pc.unique(pc.filter(batch.column("query_entry"), mask))
+                hits.update(
+                    str(value) for value in matches.to_pylist() if value is not None
+                )
+    return hits
 
 
 def _changed_target_database(
@@ -323,46 +318,17 @@ def _changed_target_database(
     *,
     search_db: str,
     affected: set[str],
-    scratch_dir: Path,
-    threads: int,
 ) -> Path | None:
     chains = _scoring_chains(data_dir, search_db)
     chains = chains.loc[chains["entry_pdb_id"].astype(str).isin(affected)]
-    identifiers = {
-        f"{search_db}_{alignment_type}": _database_identifiers(chains, alignment_type)
-        for alignment_type in ("foldseek", "mmseqs")
-    }
-    if not any(identifiers.values()):
+    if not any(_database_identifiers(chains, kind) for kind in ("foldseek", "mmseqs")):
         return None
-    target_dir = scratch_dir / f"changed-{search_db}-targets"
-    if target_dir.exists():
-        rmtree(target_dir)
-    selected = {
-        key: ids
-        for key, ids in identifiers.items()
-        if ids
-        and (
-            data_dir
-            / "dbs/weekly_delta"
-            / key.rsplit("_", 1)[1]
-            / f"{key.rsplit('_', 1)[1]}.dbtype"
-        ).is_file()
-    }
-    if not selected:
-        return None
-    databases.make_sub_dbs(
-        target_dir,
-        {
-            key: data_dir
-            / "dbs/weekly_delta"
-            / key.rsplit("_", 1)[1]
-            / key.rsplit("_", 1)[1]
-            for key in selected
-        },
-        identifiers_by_database=selected,
-        tmp_dir=scratch_dir / f"changed-{search_db}-target-work",
-        threads=threads,
-    )
+    target_dir = data_dir / "dbs/weekly_delta/subdbs"
+    if not any(
+        (target_dir / f"{search_db}_{kind}/exact_cluster.json").is_file()
+        for kind in ("foldseek", "mmseqs")
+    ):
+        raise FileNotFoundError(f"missing changed-target database for {search_db}")
     return target_dir
 
 
@@ -582,8 +548,6 @@ def _plan_alignment_repairs(
         data_dir,
         search_db=search_db,
         affected=affected,
-        scratch_dir=scratch_dir,
-        threads=threads,
     )
     reverse_hits = _search_changed_targets(
         data_dir,
@@ -673,13 +637,15 @@ def repair_alignments(
         raw_dir = data_dir / "dbs/subdbs" / f"{search_db}_{alignment_type}" / "aln"
         for pdb_id in full_queries | targeted_queries:
             (raw_dir / f"{pdb_id}.parquet").unlink(missing_ok=True)
+    shadowed_path = data_dir / "manifests/weekly_shadowed_entries.parquet"
+    shadowed = set(
+        map(str, pq.read_table(shadowed_path, columns=["pdb_id"])["pdb_id"].to_pylist())
+    )
     if targeted_queries:
         changed_targets = _changed_target_database(
             data_dir,
             search_db=search_db,
             affected=affected,
-            scratch_dir=scratch_dir / "changed-targets",
-            threads=threads,
         )
         if changed_targets is None:
             # Obsolete targets have no database to search. Re-search their old
@@ -697,15 +663,6 @@ def repair_alignments(
                     changed_targets / f"{search_db}_{backend}/exact_cluster.json"
                 ).is_file()
             ]
-            shadowed_path = data_dir / "manifests/weekly_shadowed_entries.parquet"
-            shadowed = set(
-                map(
-                    str,
-                    pq.read_table(shadowed_path, columns=["pdb_id"])[
-                        "pdb_id"
-                    ].to_pylist(),
-                )
-            )
             for source_label, query_ids in (
                 ("base", targeted_queries - shadowed),
                 ("overlay", targeted_queries & shadowed),
@@ -739,7 +696,7 @@ def repair_alignments(
                 search_db=search_db,
                 shards=targeted_shards,
                 replacement_query_ids=targeted_queries,
-                replacement_target_ids=affected,
+                replacement_target_ids=shadowed,
                 scorer_cfg=selected_cfg,
                 scratch_dir=scratch_dir / f"map-targeted-{search_db}",
                 threads=threads,
@@ -750,10 +707,6 @@ def repair_alignments(
                 )
                 for pdb_id in targeted_queries:
                     (raw_dir / f"{pdb_id}.parquet").unlink(missing_ok=True)
-    shadowed_path = data_dir / "manifests/weekly_shadowed_entries.parquet"
-    shadowed = set(
-        map(str, pq.read_table(shadowed_path, columns=["pdb_id"])["pdb_id"].to_pylist())
-    )
     for source_label, query_ids in (
         ("base", full_queries - shadowed),
         ("overlay", full_queries & shadowed),
@@ -1141,16 +1094,34 @@ def _restore_score_query_caches(
             if not missing:
                 continue
             packed = base_data_dir / "scores" / packed_name / f"shard={shard}.parquet"
-            rows = pq.read_table(
-                packed,
-                columns=schema.names,
-                filters=[("query_entry", "in", list(missing))],
-            ).cast(schema)
-            for pdb_id, destination in missing.items():
+            rows = (
+                pq.read_table(
+                    packed,
+                    columns=schema.names,
+                    filters=[("query_entry", "in", list(missing))],
+                )
+                .cast(schema)
+                .sort_by([("query_entry", "ascending")])
+            )
+            seen = set()
+            offset = 0
+            for pdb_id, group in groupby(rows["query_entry"].to_pylist()):
+                count = sum(1 for _ in group)
+                selected = rows.slice(offset, count)
+                offset += count
+                if pdb_id not in missing:
+                    continue
+                seen.add(pdb_id)
+                destination = missing[pdb_id]
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                selected = rows.filter(pc.equal(rows["query_entry"], pdb_id))
                 temporary = destination.with_suffix(".parquet.tmp")
                 pq.write_table(selected, temporary, compression="zstd")
+                temporary.replace(destination)
+            for pdb_id in missing.keys() - seen:
+                destination = missing[pdb_id]
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                temporary = destination.with_suffix(".parquet.tmp")
+                pq.write_table(rows.slice(0, 0), temporary, compression="zstd")
                 temporary.replace(destination)
 
 
@@ -2134,11 +2105,19 @@ def refresh_ligand_chemistry(
     )
     ccd = None
     if "make_ccd_ligand_dbs" not in cfg.flow.skip_specific_stages:
+        ccd_manifest = (
+            read_json_cache(
+                ccd_ligand_dbs.ccd_dbs_dir(data_dir) / "ccd_dbs.manifest.json"
+            )
+            or {}
+        )
         ccd = tasks.make_ccd_ligand_dbs(
             data_dir=data_dir,
             scratch_dir=scratch_dir / "ccd",
             threads=threads,
             minimum_similarity=float(cfg.ligand.minimum_similarity),
+            build_parity_scores=bool(ccd_manifest.get("build_parity_scores"))
+            or ccd_ligand_dbs.ccd_parity_path(data_dir).is_file(),
         )
     return {
         "status": "complete",
@@ -2465,6 +2444,11 @@ def apply_release_update(
             entries.action.isin(["added", "revised", "obsolete"]), "pdb_id"
         ].astype(str)
     )
+    if affected and (base / "exports/monomer_similarity_scores").exists():
+        raise NotImplementedError(
+            "weekly updates of releases with monomer similarity pairs require "
+            "a monomer delta-refresh stage"
+        )
     if report is None:
         entry_report = apply_entry_update(
             plan_dir,

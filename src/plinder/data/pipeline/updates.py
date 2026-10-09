@@ -218,14 +218,15 @@ def plan_update(
     threads: int = 8,
     previous_snapshot: Path | None = None,
     pdb_ids: Collection[str] | None = None,
+    refresh_pdb_ids: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Write an update report and work lists into a new, separate directory.
 
     Nothing is applied to the release. Blocked plans are review reports, not
     executable work lists. A partial ``pdb_ids`` scope is useful for testing;
     omit it for a complete release comparison. Coordinate revisions determine
-    changes here; validation-only or NextGen enrichment changes without a PDB
-    revision need a separate annotation refresh.
+    changes unless ``refresh_pdb_ids`` explicitly requests re-annotation of
+    unchanged entries against the same source revision.
     """
     data_dir = data_dir.resolve(strict=True)
     nextgen_root = nextgen_root.resolve(strict=True)
@@ -259,6 +260,23 @@ def plan_update(
         pdb_ids=scope,
     )
     entries = compare_entries(sources, snapshot, read_obsolete(obsolete_path))
+    refresh = {normalize_pdb_id(value) for value in refresh_pdb_ids or ()}
+    missing_refresh = refresh.difference(entries.pdb_id)
+    if missing_refresh:
+        raise ValueError(
+            f"refresh PDB IDs are outside the update scope: {sorted(missing_refresh)}"
+        )
+    unavailable_refresh = refresh.intersection(
+        entries.loc[entries.action != "unchanged", "pdb_id"]
+    )
+    if unavailable_refresh:
+        raise ValueError(
+            f"refresh PDB IDs must be unchanged entries: {sorted(unavailable_refresh)}"
+        )
+    entries.loc[entries.pdb_id.isin(refresh), ["action", "reason"]] = [
+        "revised",
+        "annotation refresh",
+    ]
     counts = dict(sorted(Counter(entries.action).items()))
     changed = bool(entries.action.isin(["added", "revised", "obsolete"]).any())
     status = (
@@ -269,6 +287,7 @@ def plan_update(
         "data_dir": str(data_dir),
         "nextgen_root": str(nextgen_root),
         "scope": scope,
+        "refresh_pdb_ids": sorted(refresh),
         "inputs": signatures,
         "counts": counts,
         "work": {
@@ -295,8 +314,8 @@ def plan_update(
             "Search directions are candidate work, not a complete search-cache repair plan: "
             "changed representatives and capped hit lists can require full-query searches.",
             "Recompute covers globally; their representatives and labels can change.",
-            "This plan compares PDB coordinate revisions, not independent changes to "
-            "validation reports, NextGen enrichment, CCD, or annotation settings.",
+            "This plan compares PDB coordinate revisions and explicitly refreshed "
+            "entries; other annotation changes are not detected automatically.",
         ],
     }
     # Check small catalogues again in case a source changed during revision reads.
@@ -339,6 +358,7 @@ def main() -> None:
     parser.add_argument("--obsolete", type=Path, required=True)
     parser.add_argument("--previous-snapshot", type=Path)
     parser.add_argument("--pdb-manifest", type=Path)
+    parser.add_argument("--refresh-pdb-manifest", type=Path)
     parser.add_argument("--threads", type=int, default=8)
     args = parser.parse_args()
     plan = plan_update(
@@ -349,6 +369,11 @@ def main() -> None:
         threads=args.threads,
         previous_snapshot=args.previous_snapshot,
         pdb_ids=load_manifest(args.pdb_manifest) if args.pdb_manifest else None,
+        refresh_pdb_ids=(
+            load_manifest(args.refresh_pdb_manifest)
+            if args.refresh_pdb_manifest
+            else None
+        ),
     )
     print(json.dumps(plan, indent=2, sort_keys=True))
     if plan["status"] == "blocked":

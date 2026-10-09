@@ -655,14 +655,20 @@ def make_sub_dbs(
     """
     entries = None
     identifiers_by_database: dict[str, set[str]] = {}
-    indexed_search_databases = (
-        sub_databases if set(sub_databases) <= {"holo", "apo"} else []
-    )
+    indexed_search_databases = []
+    if set(sub_databases) <= {"holo", "apo", "monomer"}:
+        indexed_search_databases = list(sub_databases)
+    elif "monomer" in sub_databases:
+        indexed_search_databases = ["monomer"]
     for search_db in indexed_search_databases:
         chains = (
             _protein_scoring_chains(data_dir)
             if search_db == "holo"
-            else _apo_scoring_chains(data_dir)
+            else (
+                _monomer_scoring_chains(data_dir)
+                if search_db == "monomer"
+                else _apo_scoring_chains(data_dir)
+            )
         )
         if search_db == "holo":
             chain_auth_ids = pd.read_parquet(
@@ -684,7 +690,7 @@ def make_sub_dbs(
             f"{row.entry_pdb_id}_{row.chain_auth_id}"
             for row in chains.itertuples(index=False)
         }
-    if set(sub_databases).difference({"holo", "apo"}):
+    if set(sub_databases).difference({"holo", "apo", "monomer"}):
         from plinder.core.scores.entries import entry_views_from_df
 
         entries = entry_views_from_df(
@@ -717,7 +723,7 @@ def make_sub_dbs(
         tmp_dir=scratch_dir,
         threads=cpu,
     )
-    if set(sub_databases).intersection({"holo", "apo"}):
+    if set(sub_databases).intersection({"holo", "apo", "monomer"}):
         make_alignment_chain_lookup(
             data_dir=data_dir,
             scratch_dir=scratch_dir,
@@ -1786,6 +1792,7 @@ def make_ccd_ligand_dbs(
     threads: int,
     force_update: bool = False,
     minimum_similarity: float = 30.0,
+    build_parity_scores: bool = False,
 ) -> Path:
     """Build the CCD-anchored MMP/ECFP4 databases and the ligand-to-CCD match sidecar."""
     ccd_ligand_dbs.make_ccd_ligand_dbs(
@@ -1794,7 +1801,7 @@ def make_ccd_ligand_dbs(
         threads=threads,
         force_update=force_update,
         minimum_similarity=minimum_similarity,
-        build_parity_scores=False,
+        build_parity_scores=build_parity_scores,
     )
     return ccd_ligand_dbs.make_ligand_ccd_match(data_dir=data_dir)
 
@@ -1851,6 +1858,36 @@ def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
             | chains["chain_is_interface"].eq(True)
         )
     ].copy()
+
+
+def _monomer_scoring_chains(data_dir: Path) -> pd.DataFrame:
+    """Return protein chains absent from pocket/interface search targets."""
+    chains = pd.read_parquet(
+        data_dir / "index" / "entry_chains.parquet",
+        columns=[
+            "entry_pdb_id",
+            "chain_asym_id",
+            "chain_auth_id",
+            "chain_receptor_type",
+            "chain_is_ligand_like",
+        ],
+    )
+    chains = chains.loc[
+        chains["chain_receptor_type"].eq("protein")
+        & ~chains["chain_is_ligand_like"].fillna(False).astype(bool)
+        & chains["chain_auth_id"].notna()
+    ]
+    holo = _protein_scoring_chains(data_dir)[["entry_pdb_id", "chain_asym_id"]]
+    return (
+        chains.merge(
+            holo.drop_duplicates(),
+            on=["entry_pdb_id", "chain_asym_id"],
+            how="left",
+            indicator=True,
+        )
+        .loc[lambda rows: rows["_merge"].eq("left_only")]
+        .drop(columns="_merge")
+    )
 
 
 def _ligand_apo_query_chains(data_dir: Path) -> pd.DataFrame:
@@ -2513,6 +2550,22 @@ def alignment_mapping_shard_is_current(
     return True
 
 
+def _restore_parquet_schema(path: Path, schema: pa.Schema) -> None:
+    """Cast a DuckDB-written file back to the shard's original physical types.
+
+    DuckDB always writes text as ``string``, while pandas 3 writes ``large_string``;
+    the values are identical, so only the physical type is restored.
+    """
+    written = pq.read_schema(path)
+    if written.equals(schema) or written.names != schema.names:
+        return
+    restored = path.with_suffix(path.suffix + ".restored")
+    with pq.ParquetWriter(restored, schema, compression="zstd") as writer:
+        for batch in pq.ParquetFile(path).iter_batches():
+            writer.write_batch(batch.cast(schema))
+    restored.replace(path)
+
+
 def _replace_release_alignment_queries(
     *,
     old: Path,
@@ -2582,6 +2635,7 @@ def _replace_release_alignment_queries(
         )
     finally:
         connection.close()
+    _restore_parquet_schema(temporary, old_schema)
     if not pq.read_schema(temporary).equals(old_schema):
         raise ValueError(
             f"patched alignment shard has an unexpected schema: {old}; "

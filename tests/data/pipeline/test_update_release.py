@@ -659,6 +659,51 @@ def test_weekly_target_repair_restores_only_needed_query_caches(tmp_path):
         ).exists()
 
 
+def test_weekly_target_repair_splits_interleaved_packed_rows_once(tmp_path):
+    base = tmp_path / "base"
+    workspace = tmp_path / "workspace"
+    score_root = base / "dbs/subdbs/search_db=holo"
+    score_root.mkdir(parents=True)
+    for pdb_id in ("1abc", "2abc", "3abc"):
+        pd.DataFrame({"query_system": [f"{pdb_id}__1"]}).to_parquet(
+            score_root / f"{pdb_id}.parquet", index=False
+        )
+    for folder, schema in (
+        ("ligand_3d_candidate_shards", schemas.LIGAND_3D_CANDIDATE_SCHEMA),
+        ("ligand_pair_score_shards", schemas.LIGAND_PAIR_SCORE_SCHEMA),
+    ):
+        packed = base / "scores" / folder / "shard=ab.parquet"
+        packed.parent.mkdir(parents=True)
+        pq.write_table(
+            pa.Table.from_pylist(
+                [
+                    {"query_entry": "2abc", "target_entry": "4def"},
+                    {"query_entry": "1abc", "target_entry": "5def"},
+                    {"query_entry": "2abc", "target_entry": "6def"},
+                ],
+                schema=schema,
+            ),
+            packed,
+        )
+
+    update_release._restore_score_query_caches(
+        base_data_dir=base,
+        data_dir=workspace,
+        query_ids={"1abc", "2abc", "3abc"},
+    )
+
+    for folder in ("ligand_3d_candidates", "ligand_pair_scores"):
+        cache = workspace / "scores" / folder / "search_db=holo/shard=ab"
+        assert pd.read_parquet(cache / "1abc.parquet")["target_entry"].tolist() == [
+            "5def"
+        ]
+        assert pd.read_parquet(cache / "2abc.parquet")["target_entry"].tolist() == [
+            "4def",
+            "6def",
+        ]
+        assert pd.read_parquet(cache / "3abc.parquet").empty
+
+
 def test_ligand_score_export_removes_stale_shards(tmp_path, monkeypatch):
     shard_dir = tmp_path / "exports" / "ligand_similarity_scores"
     shard_dir.mkdir(parents=True)
@@ -823,10 +868,21 @@ def test_old_target_discovery_reads_retained_cigars(tmp_path):
             "target_entry": ["9xyz", "8xyz", "9xyz"],
         }
     ).to_parquet(cigar, index=False)
+    foldseek = (
+        tmp_path
+        / "alignment_cigars/search_db=holo/alignment_type=foldseek/shard=cd.parquet"
+    )
+    foldseek.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_entry": ["1abc", "4abc", None],
+            "target_entry": ["9xyz", "9xyz", "9xyz"],
+        }
+    ).to_parquet(foldseek, index=False)
 
     assert update_release._queries_with_old_target_hits(
         tmp_path, search_db="holo", affected={"9xyz"}
-    ) == {"1abc", "3abc"}
+    ) == {"1abc", "3abc", "4abc"}
 
 
 def test_changed_target_probe_searches_in_reverse_once_per_backend(
@@ -1095,6 +1151,137 @@ def test_pred_alignment_repairs_only_changed_queries(tmp_path, monkeypatch):
         scratch_dir=tmp_path / "scratch",
         threads=1,
     ) == {"1abc"}
+
+
+def test_changed_target_database_reuses_weekly_subdb(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        update_release,
+        "_scoring_chains",
+        lambda *_args: pd.DataFrame(
+            {
+                "entry_pdb_id": ["1abc"],
+                "chain_asym_id": ["A"],
+                "chain_auth_id": ["A"],
+            }
+        ),
+    )
+    subdb = tmp_path / "dbs/weekly_delta/subdbs"
+    exact = subdb / "holo_mmseqs/exact_cluster.json"
+    exact.parent.mkdir(parents=True)
+    exact.write_text("{}")
+
+    assert (
+        update_release._changed_target_database(
+            tmp_path,
+            search_db="holo",
+            affected={"1abc"},
+        )
+        == subdb
+    )
+
+
+def test_targeted_weekly_repair_replaces_cumulative_delta_targets(
+    tmp_path, monkeypatch
+):
+    manifest = tmp_path / update_release.score.MANIFEST_RELATIVE
+    manifest.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc", "2def"]}).to_parquet(manifest, index=False)
+    shadowed = tmp_path / "manifests/weekly_shadowed_entries.parquet"
+    shadowed.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"pdb_id": ["2def", "3ghi"]}).to_parquet(shadowed, index=False)
+    target_dir = tmp_path / "changed"
+    marker = target_dir / "holo_mmseqs/exact_cluster.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}")
+    monkeypatch.setattr(
+        update_release, "_changed_target_database", lambda *_args, **_kwargs: target_dir
+    )
+    monkeypatch.setattr(update_release.tasks, "run_batch_searches", lambda **_kw: None)
+    monkeypatch.setattr(
+        update_release, "_rebase_unchanged_alignment_manifests", lambda *_a, **_kw: None
+    )
+    replacements = []
+    monkeypatch.setattr(
+        update_release,
+        "_refresh_alignment_shards",
+        lambda *_args, **kwargs: replacements.append(kwargs),
+    )
+
+    update_release.repair_alignments(
+        tmp_path,
+        search_db="holo",
+        affected={"2def"},
+        full_queries=set(),
+        targeted_queries={"1abc"},
+        scorer_cfg=OmegaConf.create({}),
+        foldseek_cfg=OmegaConf.create({}),
+        mmseqs_cfg=OmegaConf.create({}),
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+        batch_size=10,
+    )
+
+    assert len(replacements) == 1
+    assert replacements[0]["replacement_query_ids"] == {"1abc"}
+    assert replacements[0]["replacement_target_ids"] == {"2def", "3ghi"}
+
+
+def test_weekly_ccd_refresh_preserves_parity_from_manifest(tmp_path, monkeypatch):
+    fingerprint_path = tmp_path / "fingerprints/ligands_per_smiles.parquet"
+    fingerprint_path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "ligand_smiles_id": [1],
+            "ligand_rdkit_canonical_smiles": ["CCO"],
+            "fingerprint": [b"fingerprint"],
+        }
+    ).to_parquet(fingerprint_path, index=False)
+    ccd_manifest = tmp_path / "ccd_dbs/ccd_dbs.manifest.json"
+    ccd_manifest.parent.mkdir()
+    ccd_manifest.write_text('{"build_parity_scores": true}')
+    monkeypatch.setattr(
+        update_release.get_similarity_scores,
+        "ligand_score_manifest_payload",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        update_release.tasks, "compute_ligand_fingerprints", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        update_release, "_refresh_chemical_score_shards", lambda **_kwargs: {}
+    )
+    monkeypatch.setattr(
+        update_release.tasks, "annotate_ligand_similarity", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        update_release.tasks, "make_ligand_mmp_pairs", lambda **_kwargs: tmp_path
+    )
+    ccd_calls = []
+    monkeypatch.setattr(
+        update_release.tasks,
+        "make_ccd_ligand_dbs",
+        lambda **kwargs: ccd_calls.append(kwargs) or tmp_path / "ccd_dbs",
+    )
+    cfg = OmegaConf.create(
+        {
+            "ligand": {
+                "number_id_col": "ligand_smiles_id",
+                "minimum_similarity": 30.0,
+                "cofactor_similarity_threshold": 90.0,
+            },
+            "flow": {
+                "cluster_metrics": [],
+                "make_ligands_batch_size": 10,
+                "skip_specific_stages": [],
+            },
+        }
+    )
+
+    update_release.refresh_ligand_chemistry(
+        tmp_path, cfg=cfg, scratch_dir=tmp_path / "scratch", threads=1
+    )
+
+    assert ccd_calls[0]["build_parity_scores"] is True
 
 
 def test_release_update_runs_only_configured_search_databases(tmp_path, monkeypatch):

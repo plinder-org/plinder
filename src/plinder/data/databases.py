@@ -280,7 +280,7 @@ def _search_database_bundle_sources(
             f"unsafe database prefix in {source_root / 'exact_cluster.json'}"
         )
     prefixes = {value for value in values if isinstance(value, str)}
-    sources = {source_root / "exact_cluster.json"}
+    sources: set[Path] = set()
     for prefix in prefixes:
         sources.update(
             path
@@ -812,6 +812,26 @@ def make_sub_dbs(
                 )
             )
             working_database = working_subdb / working_subdb.name
+            if search_db_aln_type.startswith("monomer_") and not (
+                working_database.with_suffix(".index").is_file()
+                and _database_entry_count(working_database)
+            ):
+                # linclust crashes on an empty database. An empty monomer
+                # universe is not an error: downstream bundling skips it.
+                # Retire any earlier build so it is not published as current.
+                LOG.info(f"no {search_db_aln_type} chains selected; skipping")
+                for stale in ("exact_cluster.json", "selection.json"):
+                    (subdb / stale).unlink(missing_ok=True)
+                for prefix in (
+                    subdb.name,
+                    "exact_clusters",
+                    "representatives",
+                    "cluster_alignments",
+                    "clustered",
+                ):
+                    _remove_database_prefix(subdb / prefix)
+                report[search_db_aln_type] = missing
+                continue
             cluster_manifest = make_exact_search_db(
                 full_db=working_database,
                 aln_type=aln_type,

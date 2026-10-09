@@ -9,8 +9,9 @@ extracts protein-ligand systems and protein-protein interfaces from the PDB.
 
 ## Release layout
 
-PLINDER releases are identified by the month of their PDB snapshot and a
-release number within that month. The file layout is:
+PLINDER releases are identified by the month of their PDB snapshot
+(`YYYY-MM`; the current release is `2026-09`) and served from
+`https://cameo3d.org/plinder/PLINDER-<release-month>/`. The file layout is:
 
 :::{note}
 Historical releases remain available at `gs://plinder/2024-04/v0`,
@@ -19,54 +20,60 @@ differ from the current release.
 :::
 
 ```text
-<release-month>/
-└── <release-number>/
-    ├── index/
-    │   ├── annotation_table.parquet
-    │   ├── system_validation.parquet
-    │   ├── entry_chains.parquet
-    │   ├── entry_biounit_chains.parquet
-    │   ├── entry_metadata.parquet
-    │   ├── entry_sources.parquet
-    │   ├── interface_annotation_table.parquet
-    │   ├── alignment_chain_lookup.parquet
-    │   ├── linked_apo_structures.parquet
-    │   ├── interface_apo_structures.parquet
-    │   ├── ligand_pocket_membership.parquet
-    │   ├── ligand_pocket_representatives.parquet
-    │   ├── ligand_clusters.parquet
-    │   ├── ligand_affinity.parquet
-    │   ├── bindingdb_measurements.parquet
-    │   ├── ligand_mmp_pairs.parquet
-    │   ├── interface_half_representatives.parquet
-    │   ├── interface_membership.parquet
-    │   ├── interface_representatives.parquet
-    │   └── interface_clusters.parquet
-    ├── ligand_archives/
-    │   ├── {two_char_code}.parquet
-    │   └── manifest.json
-    ├── alignment_cigars/
-    │   └── search_db=holo/
-    │       └── alignment_type={foldseek,mmseqs}/
-    │           └── shard={two_char_code}.parquet
-    ├── ligand_scores/
-    │   └── {fragment}.parquet
-    ├── ligand_sampling/
-    │   ├── set_cover/metric={metric}/threshold={threshold}.parquet
-    │   └── directed_set_cover/metric={metric}/threshold={threshold}.parquet
-    ├── interface_sampling/
-    │   └── directed_set_cover/metric=interface_qcov/threshold={threshold}.parquet
-    ├── search_databases/
-    │   ├── manifest.json
-    │   ├── holo_foldseek/
-    │   └── holo_mmseqs/
-    └── exports/
-        ├── ligand_similarity_scores.parquet
-        ├── interface_similarity_scores.parquet
-        ├── interface_half_similarity_scores.parquet
-        └── protein_similarity_scores/
-            └── alignment_type={foldseek,mmseqs}/
-                └── shard={two_char_code}.parquet
+PLINDER-<release-month>/
+├── index/
+│   ├── annotation_table.parquet
+│   ├── system_validation.parquet
+│   ├── entry_chains.parquet
+│   ├── entry_biounit_chains.parquet
+│   ├── entry_metadata.parquet
+│   ├── entry_sources.parquet
+│   ├── interface_annotation_table.parquet
+│   ├── alignment_chain_lookup.parquet
+│   ├── linked_apo_structures.parquet
+│   ├── interface_apo_structures.parquet
+│   ├── ligand_pocket_membership.parquet
+│   ├── ligand_pocket_residues.parquet
+│   ├── ligand_pocket_representatives.parquet
+│   ├── ligand_clusters.parquet
+│   ├── ligand_affinity.parquet
+│   ├── bindingdb_measurements.parquet
+│   ├── ligand_mmp_pairs.parquet
+│   ├── interface_half_representatives.parquet
+│   ├── interface_membership.parquet
+│   ├── interface_representatives.parquet
+│   └── interface_clusters.parquet
+├── protein_clusters/
+│   ├── sequence.parquet
+│   └── structure.parquet
+├── ligand_archives/
+│   └── {two_char_code}.parquet
+├── alignment_cigars/
+│   └── search_db={holo,apo,interface_apo}/
+│       └── alignment_type={foldseek,mmseqs}/
+│           └── shard={two_char_code}.parquet
+├── ligand_scores/
+│   └── retained.parquet
+├── ligand_sampling/
+│   ├── set_cover/metric={metric}/threshold={threshold}.parquet
+│   └── directed_set_cover/metric={metric}/threshold={threshold}.parquet
+├── interface_sampling/
+│   └── directed_set_cover/metric={interface_qcov,interface_side_qcov}/threshold={threshold}.parquet
+├── search_databases/
+│   ├── holo_foldseek/
+│   ├── holo_mmseqs/
+│   ├── monomer_foldseek/
+│   └── monomer_mmseqs/
+└── exports/
+    ├── ligand_similarity_scores.parquet
+    ├── interface_similarity_scores.parquet
+    ├── interface_half_similarity_scores.parquet
+    ├── protein_similarity_scores/
+    │   └── alignment_type={foldseek,mmseqs}/
+    │       └── shard={two_char_code}.parquet
+    └── monomer_similarity_scores/
+        └── alignment_type={foldseek,mmseqs}/
+            └── monomer_{holo,monomer}_{batch}.parquet
 ```
 
 `plinder_download` downloads the index and representative-cover tables by
@@ -234,6 +241,15 @@ exact assembly-chain instance selected for reconstruction.
 chain-pair scores, including query and target coverage, sequence identity,
 sequence similarity, and Foldseek lDDT. Percentage values are stored as
 integers from 0 to 100.
+`exports/monomer_similarity_scores/` adds query chains outside ligand pockets
+and protein interfaces. Pass `include_monomers=True` to
+`query_protein_similarity()` to read both sets of chain pairs.
+
+For a custom structure or FASTA search, `search()` returns
+`result.chain_similarity_scores`, a Parquet file of direct chain-level hits
+with the same score fields. FASTA results retain the original sequence IDs.
+By default, chain hits also include protein chains outside ligand pockets
+and protein interfaces. Pocket and interface scores use their own targets.
 
 The optional `alignment_cigars/` files contain full-chain CIGARs, alignment
 starts, and bit-packed residue identity flags. Holo chain-pair statistics are
@@ -279,12 +295,13 @@ in `::side=1` or `::side=2`. Use `query_interface_similarity()` or
 
 ## Representative covers
 
-- `ligand_sampling/set_cover/` contains an undirected set cover for reciprocal
-  Tanimoto similarity;
+- `ligand_sampling/set_cover/` contains undirected set covers for reciprocal
+  Tanimoto (ECFP4) and Jaccard (MHFP6) similarity;
 - `ligand_sampling/directed_set_cover/` contains directed covers for pocket,
   interaction, and pocket-weighted ligand 3D metrics;
-- `interface_sampling/directed_set_cover/` contains directed covers for protein
-  interfaces.
+- `interface_sampling/directed_set_cover/` contains directed covers for whole
+  protein interfaces (`interface_qcov`) and interface sides
+  (`interface_side_qcov`).
 
 Each metric has files named `metric={metric}/threshold={threshold}.parquet`.
 The release also includes one row per ligand in

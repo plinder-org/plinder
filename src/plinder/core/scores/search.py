@@ -36,6 +36,7 @@ def search(
     search_config: CustomProteinSearchConfig | None = None,
     plinder_entry_ids: Iterable[str] | None = None,
     store_aligned_pocket_residues: bool = False,
+    include_monomers: bool = True,
 ) -> CustomScoringResult | CustomSequenceScoringResult:
     """Search with the same structure table accepted by evaluation.
 
@@ -54,6 +55,12 @@ def search(
     other PDB components are omitted. Supply ligand poses through ``ligand_path``.
 
     The returned result contains paths to score tables and alignment files.
+    ``chain_similarity_scores`` gives direct protein-chain hits, with query and
+    target coverage, identity, sequence similarity, and Foldseek lDDT as
+    integer percentages. FASTA results include the original ``sequence_id``.
+    With ``include_monomers=True``, chain hits also cover proteins outside
+    ligand pockets and protein interfaces. Pocket and interface scores still
+    use their own targets.
     ``search_config`` controls search filters. Its shared ``evalue`` defaults to
     0.01; ``foldseek_evalue``, ``mmseqs_evalue`` and ``steam_evalue`` override it
     independently for their respective backends.
@@ -70,6 +77,7 @@ def search(
         search_config=search_config,
         plinder_entry_ids=plinder_entry_ids,
         store_aligned_pocket_residues=store_aligned_pocket_residues,
+        include_monomers=include_monomers,
     )
     path = None if isinstance(inputs, pd.DataFrame) else Path(inputs).resolve()
     if path is not None and path.name.lower().endswith(

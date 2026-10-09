@@ -44,11 +44,15 @@ def prefetch_similarity_alignments(
     *,
     search_db: str = "holo",
     data_dir: Path | None = None,
+    include_protein_scores: bool = False,
 ) -> dict[str, dict[str, Path]]:
     """Download or verify only the mapped alignments needed by query systems.
 
     Calling this on an online node populates the normal PLINDER cache. Calling
     it later with offline mode enabled only checks those same local files.
+    With ``include_protein_scores``, each backend also needs its matching
+    protein-similarity export shard, which supplies the alignment scores that
+    the CIGAR shards omit (needed for ligand similarity reconstruction).
     """
     if search_db != "holo":
         raise NotImplementedError(
@@ -79,6 +83,17 @@ def prefetch_similarity_alignments(
                         alignment_type=alignment_type,
                         shard=shard,
                     )
+                    if include_protein_scores:
+                        _release_file(
+                            "protein_similarity_score_shard",
+                            data_dir=data_dir,
+                            description=(
+                                f"{alignment_type} protein similarity score "
+                                f"shard {shard}"
+                            ),
+                            alignment_type=alignment_type,
+                            shard=shard,
+                        )
                 except FileNotFoundError as exc:
                     resolved[key] = None
                     resolution_errors[key] = exc
@@ -458,6 +473,7 @@ def reconstruct_similarity_scores(
         query_systems,
         search_db=search_db,
         data_dir=data_dir,
+        include_protein_scores=True,
     )
     selected_pdb_ids = {
         _pdb_id(system_id) for system_id in query_systems | target_systems

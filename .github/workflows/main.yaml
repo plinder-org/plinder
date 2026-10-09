@@ -2,7 +2,6 @@ name: Package
 permissions:
   contents: write
   id-token: write
-  packages: write
 on:
   push:
     branches:
@@ -14,51 +13,48 @@ jobs:
     name: Package
     if: ${{ ! contains(toJSON(github.event.commits.*.message), '[skip ci]') }}
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Setup python
-        uses: actions/setup-python@v5
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v1
         with:
-          python-version: "3.12"
-      - name: Configure docker
-        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
-      - name: Install build and tag requirements
-        run: python -m pip install build semver
+          environment-file: environment.yml
+          create-args: python=3.12
+          init-shell: bash
+          cache-downloads: true
+          cache-environment: true
+          post-cleanup: all
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install plinder
+        run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --inexact
       - name: Get version bump
         id: get-tag
-        run: echo "bump=$(python flows/docker.py bump)" >> $GITHUB_OUTPUT
-      - name: Pull, build, tag, bump base image
+        run: echo "bump=$(python version.py)" >> $GITHUB_OUTPUT
+      - name: Run tests
         if: steps.get-tag.outputs.bump != ''
-        run: python flows/docker.py pull --build --promote
-      - name: Build image
+        env:
+          PLINDER_OFFLINE: "true"
+        run: python -m pytest -n auto -v
+      - name: Tag release
         if: steps.get-tag.outputs.bump != ''
-        run: python flows/docker.py build
-      - name: Run tests against new image and save images
-        if: steps.get-tag.outputs.bump != ''
-        run: |
-          python flows/docker.py test --push
-          if ! test -f reports/.coverage; then
-            echo "Missing test coverage reports (reports/.coverage). Not all tests have passed?"
-            exit 1
-          else
-            echo "Test coverage report found!"
-          fi
+        run: git tag ${{ steps.get-tag.outputs.bump }}
       - name: Build distribution
-        run: python -m build
+        run: uv build
       - name: Publish package distributions to PyPI
         if: steps.get-tag.outputs.bump != ''
         uses: pypa/gh-action-pypi-publish@release/v1
       - name: Save git tag
         if: steps.get-tag.outputs.bump != ''
         run: git push origin ${{ steps.get-tag.outputs.bump }}
-      - name: Copy and surgery coverage
-        if: steps.get-tag.outputs.bump != ''
-        run: |
-          cp reports/.coverage .
-          sqlite3 .coverage "update file set path='src/' || substr(path, 40);"
       - name: Post coverage comment
         if: steps.get-tag.outputs.bump != ''
         uses: py-cov-action/python-coverage-comment-action@v3
