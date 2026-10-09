@@ -776,7 +776,9 @@ def drop_self_clashing_symmetry_copies(
     C-alpha atoms: a chain is removed if at least five and more than 10%, or
     at least twenty regardless of chain length, lie within 2 Å of previously
     retained protein chains. Such C-alpha distances are nonphysical for
-    separate chains. Requires the ``sym_id`` and ``label_asym_id`` annotations.
+    separate chains. Near-coincident protein copies are also removed when
+    more than half of their C-alpha atoms lie within 2.5 Å of a single kept
+    chain. Requires the ``sym_id`` and ``label_asym_id`` annotations.
     """
     categories = set(assembly.get_annotation_categories())
     if not {"sym_id", "label_asym_id"}.issubset(categories):
@@ -835,11 +837,11 @@ def drop_self_clashing_symmetry_copies(
         )
         unique_chains, chain_index = np.unique(chain_names, return_inverse=True)
         chain_sizes = np.bincount(chain_index)
-        eligible = [index for index, size in enumerate(chain_sizes) if size >= 10]
+        eligible = [index for index, size in enumerate(chain_sizes) if size >= 5]
         if len(eligible) > 1:
             cell_list = struc.CellList(ca, cell_size=3.0)
             retained: list[int] = []
-            dropped_chains: list[tuple[str, int, float]] = []
+            dropped_chains: list[tuple[str, int, float, float]] = []
             for index in sorted(
                 eligible,
                 key=lambda value: (
@@ -849,33 +851,62 @@ def drop_self_clashing_symmetry_copies(
             ):
                 query_mask = chain_index == index
                 if retained:
-                    neighbors = cell_list.get_atoms(ca.coord[query_mask], radius=2.0)
-                    clashing = (
-                        (neighbors >= 0)
-                        & np.isin(chain_index[np.clip(neighbors, 0, None)], retained)
-                    ).any(axis=1)
+                    query_coords = ca.coord[query_mask]
+                    neighbors = cell_list.get_atoms(query_coords, radius=2.5)
+                    retained_neighbors = (neighbors >= 0) & np.isin(
+                        chain_index[np.clip(neighbors, 0, None)], retained
+                    )
+                    query_rows, neighbor_columns = np.nonzero(retained_neighbors)
+                    neighbor_indices = neighbors[query_rows, neighbor_columns]
+                    clashing = np.zeros(len(query_coords), dtype=bool)
+                    distances = np.linalg.norm(
+                        query_coords[query_rows] - ca.coord[neighbor_indices], axis=1
+                    )
+                    clashing[query_rows[distances <= 2.0]] = True
+                    # Count residues per partner, not multiple nearby atoms or
+                    # the combined contacts to several distinct chains.
+                    residue_partners = np.unique(
+                        np.column_stack((query_rows, chain_index[neighbor_indices])),
+                        axis=0,
+                    )
+                    _, partner_counts = np.unique(
+                        residue_partners[:, 1], return_counts=True
+                    )
+                    overlap_fraction = float(
+                        partner_counts.max(initial=0) / len(query_coords)
+                    )
+                    near_copy = overlap_fraction > 0.5
                     fraction = float(clashing.mean())
                     clash_count = int(clashing.sum())
-                    if clash_count >= 20 or (clash_count >= 5 and fraction > 0.1):
+                    if (
+                        near_copy
+                        or clash_count >= 20
+                        or (clash_count >= 5 and fraction > 0.1)
+                    ):
                         sym_id, asym_id = unique_chains[index].split(".", 1)
                         keep &= ~(
                             (assembly.sym_id == int(sym_id))
                             & (assembly.label_asym_id == asym_id)
                         )
                         dropped_chains.append(
-                            (str(unique_chains[index]), clash_count, fraction)
+                            (
+                                str(unique_chains[index]),
+                                clash_count,
+                                fraction,
+                                overlap_fraction,
+                            )
                         )
                         continue
                 retained.append(index)
             if dropped_chains:
                 LOG.info(
                     "%s: dropped %d clashing protein chains (first 10 chain, "
-                    "C-alpha clash count, fraction): %s",
+                    "2 Å C-alpha clash count, fraction, 2.5 Å partner overlap): %s",
                     context,
                     len(dropped_chains),
                     [
-                        (chain, count, round(fraction, 2))
-                        for chain, count, fraction in dropped_chains[:10]
+                        (chain, count, round(fraction, 2), round(overlap, 2))
+                        for chain, count, fraction, overlap in dropped_chains[:10]
                     ],
                 )
     if keep.all():

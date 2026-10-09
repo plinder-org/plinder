@@ -1443,3 +1443,52 @@ def test_drop_long_protein_chain_with_many_absolute_ca_clashes():
     kept = drop_self_clashing_symmetry_copies(atoms)
 
     assert set(kept.label_asym_id) == {"A", "C"}
+
+
+@pytest.mark.parametrize("length", [5, 9, 20])
+@pytest.mark.parametrize("offset,removed", [(2.0, True), (2.5, True), (2.6, False)])
+def test_drop_near_coincident_protein_copies(length, offset, removed):
+    import biotite.structure as struc
+
+    from plinder.data.annotations.cif_utils import drop_self_clashing_symmetry_copies
+
+    base = np.column_stack(
+        (np.arange(length) * 3.8, np.zeros(length), np.zeros(length))
+    )
+    atoms = struc.AtomArray(2 * length)
+    atoms.coord = np.concatenate((base, base + [0.0, offset, 0.0]))
+    atoms.set_annotation("label_asym_id", np.repeat(["A", "B"], length))
+    atoms.set_annotation("sym_id", np.zeros(len(atoms), dtype=int))
+    atoms.chain_id = atoms.label_asym_id.copy()
+    atoms.atom_name[:] = "CA"
+    atoms.element[:] = "C"
+    atoms.res_name[:] = "ALA"
+    atoms.res_id = np.tile(np.arange(1, length + 1), 2)
+
+    kept = drop_self_clashing_symmetry_copies(atoms)
+
+    assert set(kept.label_asym_id) == ({"A"} if removed else {"A", "B"})
+
+
+def test_near_copy_requires_majority_overlap_with_one_partner():
+    import biotite.structure as struc
+
+    from plinder.data.annotations.cif_utils import drop_self_clashing_symmetry_copies
+
+    base = np.column_stack((np.arange(20) * 3.8, np.zeros(20), np.zeros(20)))
+    other = base + [0.0, 20.0, 0.0]
+    mixed = base + [0.0, 2.5, 0.0]
+    mixed[10:] = other[10:] + [0.0, 2.5, 0.0]
+    atoms = struc.AtomArray(60)
+    atoms.coord = np.concatenate((base, other, mixed))
+    atoms.set_annotation("label_asym_id", np.repeat(["A", "B", "C"], 20))
+    atoms.set_annotation("sym_id", np.zeros(len(atoms), dtype=int))
+    atoms.chain_id = atoms.label_asym_id.copy()
+    atoms.atom_name[:] = "CA"
+    atoms.element[:] = "C"
+    atoms.res_name[:] = "ALA"
+    atoms.res_id = np.tile(np.arange(1, 21), 3)
+
+    kept = drop_self_clashing_symmetry_copies(atoms)
+
+    assert set(kept.label_asym_id) == {"A", "B", "C"}

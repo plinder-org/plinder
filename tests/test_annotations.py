@@ -171,6 +171,90 @@ def test_protein_contacts_include_short_polypeptide_partners() -> None:
     )
 
 
+@pytest.mark.parametrize("clashing_residues", [9, 10])
+@pytest.mark.parametrize("cached_contacts", [False, True])
+def test_protein_interface_clashes_exclude_pairs_not_chains(
+    clashing_residues, cached_contacts
+):
+    atoms = struc.AtomArray(36)
+    atoms.chain_id = np.repeat(["1.A", "1.B", "1.C"], 12)
+    atoms.res_id = np.tile(np.arange(1, 13), 3)
+    atoms.atom_name[:] = "CA"
+    atoms.element[:] = "C"
+    atoms.res_name[:] = "ALA"
+    base = np.column_stack((np.arange(12) * 3.8, np.zeros(12), np.zeros(12)))
+    close = base + [0.0, 1.0, 0.0]
+    close[clashing_residues:, 1] = 3.0
+    atoms.coord = np.concatenate((base, close, base + [0.0, 6.0, 0.0]))
+    chains = {name: _interface_test_chain(list(range(1, 13))) for name in "ABC"}
+    spatial_index = BiounitSpatialIndex.from_atoms(atoms, 10.0)
+    contacts = find_protein_chain_contacts(
+        atoms, chains=chains, contact_radius=10.0, spatial_index=spatial_index
+    )
+
+    interfaces = detect_protein_interfaces(
+        atoms,
+        pdb_id="1abc",
+        biounit_id="1",
+        chains=chains,
+        spatial_index=spatial_index,
+        chain_contacts=contacts if cached_contacts else None,
+    )
+
+    pairs = {(row.chain_1, row.chain_2) for row in interfaces}
+    expected = {("1.A", "1.C"), ("1.B", "1.C")}
+    if clashing_residues < 10:
+        expected.add(("1.A", "1.B"))
+    assert pairs == expected
+    assert ("1.A", "1.B") in contacts
+
+
+def test_protein_interface_clash_threshold_counts_residues_not_atoms():
+    atoms = struc.AtomArray(72)
+    atoms.chain_id = np.repeat(["1.A", "1.B"], 36)
+    atoms.res_id = np.tile(np.repeat(np.arange(1, 10), 4), 2)
+    atoms.atom_name = np.tile(["N", "CA", "C", "O"], 18)
+    atoms.element = np.tile(["N", "C", "C", "O"], 18)
+    atoms.res_name[:] = "ALA"
+    base = np.column_stack(
+        (np.repeat(np.arange(9) * 3.8, 4), np.zeros(36), np.zeros(36))
+    )
+    atoms.coord = np.concatenate((base, base + [0.0, 1.0, 0.0]))
+
+    interfaces = detect_protein_interfaces(
+        atoms,
+        pdb_id="1abc",
+        biounit_id="1",
+        chains={name: _interface_test_chain(list(range(1, 10))) for name in "AB"},
+    )
+
+    assert len(interfaces) == 1
+
+
+@pytest.mark.parametrize("known_residues", [0, 1, 12])
+@pytest.mark.parametrize("atom_name", ["CA", "N"])
+def test_protein_interfaces_require_some_known_residues(known_residues, atom_name):
+    atoms = struc.AtomArray(24)
+    atoms.chain_id = np.repeat(["1.A", "1.B"], 12)
+    atoms.res_id = np.tile(np.arange(1, 13), 2)
+    atoms.atom_name[:] = atom_name
+    atoms.element[:] = "C" if atom_name == "CA" else "N"
+    atoms.res_name[:] = "ALA"
+    atoms.res_name[12:] = "UNK"
+    atoms.res_name[12 : 12 + known_residues] = "ALA"
+    base = np.column_stack((np.arange(12) * 3.8, np.zeros(12), np.zeros(12)))
+    atoms.coord = np.concatenate((base, base + [0.0, 4.5, 0.0]))
+
+    interfaces = detect_protein_interfaces(
+        atoms,
+        pdb_id="1abc",
+        biounit_id="1",
+        chains={name: _interface_test_chain(list(range(1, 13))) for name in "AB"},
+    )
+
+    assert len(interfaces) == int(known_residues > 0)
+
+
 def test_interface_system_id_is_unordered_and_rejects_self_interfaces():
     assert interface_system_id("1ABC", "2", "2.B", "1.A") == interface_system_id(
         "1abc", "2", "1.A", "2.B"
