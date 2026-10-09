@@ -2490,6 +2490,11 @@ def apply_release_update(
     unchanged_scoring = _unchanged_scoring_entries(base, workspace, affected)
     scoring_affected = affected - unchanged_scoring
     report["unchanged_scoring_entries"] = sorted(unchanged_scoring)
+    if not scoring_affected:
+        report.setdefault(
+            "alignment_repair_queries",
+            {search_db: [] for search_db in alignment_databases},
+        )
     write_json_atomic(state_path, report)
     if not scoring_affected and set(report["completed_stages"]) == {
         "entries_and_archives"

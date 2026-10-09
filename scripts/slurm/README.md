@@ -3,6 +3,8 @@
 The entry jobs read the managed NextGen mmCIF and validation archives directly.
 They do not stage inputs or create symlinks.
 
+Example ingest configurations are in [`configs/ingest`](configs/ingest).
+
 Set site-specific locations in the submission environment:
 
 ```bash
@@ -459,14 +461,13 @@ The default final path is `exports/ligand_similarity_scores.parquet`; set
 override the temporary shard directory or final release location.
 
 Targeted collation repairs deliberately leave `index/collation.json` in
-`requires_downstream_repair` state and remove the stale nonredundant index.
-After repairing fingerprints and affected score shards, rerun the clustering
-and final-index sequence below. Finalization now rejects cluster artifacts that
-do not exactly cover the current eligible ligand universe and marks the repair
-complete only after recreating `annotation_table_nonredundant.parquet`.
+`requires_downstream_repair` state. After repairing fingerprints and affected
+score shards, rerun the clustering and final-index sequence below. Finalization
+rejects cluster artifacts that do not exactly cover the current eligible ligand
+universe and marks the repair complete after assembling the final index tables.
 
-Build ligand-level reciprocal-minimum components and greedy centroid
-communities only after score finalization.
+Build internal connectivity partitions and representative set covers only after
+score finalization.
 The planning job reports exact array counts for the default metrics and the
 30, 50, 70, 90, and 100 thresholds:
 
@@ -523,22 +524,23 @@ sbatch \
 The merge publishes exact connected components of the reciprocal-minimum graph
 without retaining a full in-memory 30%-threshold graph. It also creates
 any-direction connectivity partitions used by the optional directed sampling
-cover. Finally, read `community_batch_count` from the plan log and scatter one
-metric/threshold per task:
+cover. Finally, read `set_cover_batch_count` from the plan log and scatter one
+chemical metric/threshold per task. Skip this array when the count is zero,
+including for protein-interface clustering:
 
 ```bash
-COMMUNITY_JOB=$(sbatch --parsable \
-  --qos=6hours --array=0-LAST_COMMUNITY_INDEX \
+SET_COVER_JOB=$(sbatch --parsable \
+  --qos=6hours --array=0-LAST_SET_COVER_INDEX \
   --cpus-per-task=8 --mem=128G \
-  --output="${OUTPUT_ROOT}/logs/community-%A-%a.out" \
+  --output="${OUTPUT_ROOT}/logs/set-cover-%A-%a.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
-  scripts/slurm/score_v3.sbatch communities "${OUTPUT_ROOT}" 1)
+  scripts/slurm/score_v3.sbatch set-covers "${OUTPUT_ROOT}" 1)
 ```
 
-Communities use deterministic greedy centroid cover followed by reassignment
-to the highest-scoring selected centroid. Every member meets the threshold in
-both directions to its centroid; two non-centroid members need not meet it
-directly. For Tanimoto, the symmetric score is used directly.
+Chemical set covers use deterministic greedy representative selection on
+reciprocal-minimum edges. Every member meets the threshold to its representative;
+two non-representative members need not meet it directly. Chemical similarity
+scores are symmetric.
 
 Run `directed-covers` with the
 `directed_cover_batch_count` from the plan. A centroid covers query ligand `Q`
@@ -576,25 +578,26 @@ export PLINDER_CLUSTER_METRICS='interface_qcov'
 export PLINDER_CLUSTER_THRESHOLDS='100,90,70,50,30'
 ```
 
-The interface plan reads `interface_scores/shard=*.parquet`. Reciprocal
-components and communities are written below `interface_clusters/`; the
+The interface plan reads `interface_scores/shard=*.parquet`. Internal
+connectivity partitions are written below `interface_clusters/`; the
 directional centroid cover is written below `interface_sampling/`. Final index
-enrichment adds `interface_qcov__THRESHOLD__component`, `__community`, and
-`__directed_set_cover` columns for whole-interface product scores.
+enrichment adds `interface_qcov__THRESHOLD__directed_set_cover` columns for
+whole-interface product scores. Component labels remain internal.
 The ligand and interface plans and artifacts never share cache paths.
 Run both entity sequences before `finalize-index`; finalization rejects a
 non-empty interface annotation table when its interface clusters are absent.
 
-After component, community, and directed-cover branches complete, validate every
+After connectivity, set-cover, and directed-cover branches complete, validate every
 published artifact and write `ligand_clusters/stats.parquet` (or
 `interface_clusters/stats.parquet`) plus `stats.json`.
 This gate checks artifact coverage, duplicate and null labels, consistent ligand
-counts, and monotonic component counts across thresholds. Community and cover
-counts are reported but are not required to be monotonic:
+counts, and monotonic internal component counts across thresholds. Cover counts
+are reported but are not required to be monotonic. When the set-cover array was
+skipped, leave `SET_COVER_JOB` unset or empty:
 
 ```bash
 STATS_JOB=$(sbatch --parsable \
-  --dependency="afterok:${COMMUNITY_JOB}:${DIRECTED_COVER_JOB}" \
+  --dependency="afterok:${SET_COVER_JOB:+${SET_COVER_JOB}:}${DIRECTED_COVER_JOB}" \
   --qos=6hours --cpus-per-task=8 --mem=128G \
   --output="${OUTPUT_ROOT}/logs/cluster-stats-%j.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \

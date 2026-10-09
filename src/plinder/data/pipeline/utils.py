@@ -254,8 +254,7 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
             return ret
         else:
             LOG.info(f"skipping {func.__name__}")
-        # Metaflow foreach joins need one no-op branch in order to remain
-        # reachable when a stage is excluded by run_specific_stages.
+        # Keep the scatter/compute/join interface valid for skipped stages.
         return [[]]
 
     return inner

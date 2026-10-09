@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from omegaconf import OmegaConf
 from rdkit import DataStructs
 
@@ -1282,6 +1283,96 @@ def test_weekly_ccd_refresh_preserves_parity_from_manifest(tmp_path, monkeypatch
     )
 
     assert ccd_calls[0]["build_parity_scores"] is True
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_metadata_only_update_finishes_without_alignment_repairs(
+    tmp_path, monkeypatch, resume
+):
+    plan_dir = tmp_path / "plan"
+    plan_dir.mkdir()
+    base = tmp_path / "base"
+    base.mkdir()
+    plan = {"data_dir": str(base), "nextgen_root": str(tmp_path / "nextgen")}
+    write_json_atomic(plan_dir / "plan.json", plan)
+    entries = pd.DataFrame({"pdb_id": ["1abc"], "action": ["revised"]})
+    entries.to_parquet(plan_dir / "entries.parquet", index=False)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}")
+    validation_root = tmp_path / "validation"
+    validation_root.mkdir()
+    workspace = tmp_path / "workspace"
+    (workspace / "index").mkdir(parents=True)
+    state_path = workspace / "weekly_update.json"
+    report = {
+        "status": "running",
+        "inputs": update_release._weekly_inputs(plan_dir, config_path, validation_root),
+        "base_release": str(base),
+        "affected_pdb_ids": ["1abc"],
+        "completed_stages": (
+            list(update_release._STAGES[:-1]) if resume else ["entries_and_archives"]
+        ),
+    }
+    if resume:
+        report.update(
+            search_inputs={"reused_base": True},
+            alignments={"full_queries": {"holo": []}},
+            scores={"reused_base": True},
+            ligand_chemistry={"reused_base": True},
+            cluster_assignments={
+                "ligand": str(workspace / "index/ligand_clusters.parquet"),
+                "interface": str(workspace / "index/interface_clusters.parquet"),
+            },
+        )
+    write_json_atomic(state_path, report)
+    monkeypatch.setattr(
+        update_release,
+        "_load_configuration",
+        lambda _path: OmegaConf.create({"scorer": {"sub_databases": ["holo"]}}),
+    )
+    monkeypatch.setattr(
+        update_release, "load_update_plan", lambda _path: (plan, entries)
+    )
+    monkeypatch.setattr(
+        update_release, "_unchanged_scoring_entries", lambda *_args: {"1abc"}
+    )
+    monkeypatch.setattr(
+        update_release,
+        "_refresh_foldseek_source_manifest",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        update_release, "_rebase_reused_scoring_artifacts", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        update_release,
+        "_load_or_plan_alignment_repairs",
+        lambda *_args, **_kwargs: pytest.fail("metadata-only updates reuse alignments"),
+    )
+    finalizations = []
+
+    def finalize_index(*, data_dir, **_kwargs):
+        finalizations.append(data_dir)
+        write_json_atomic(data_dir / "index/collation.json", {"status": "complete"})
+
+    monkeypatch.setattr(update_release.tasks, "finalize_index", finalize_index)
+    kwargs = {
+        "validation_root": validation_root,
+        "config_path": config_path,
+        "scratch_dir": tmp_path / "scratch",
+        "threads": 1,
+    }
+
+    result = update_release.apply_release_update(plan_dir, workspace, **kwargs)
+
+    assert result["status"] == "complete"
+    assert result["alignment_repair_queries"] == {"holo": []}
+    assert result["completed_stages"] == list(update_release._STAGES)
+    assert json.loads(state_path.read_text())["alignment_repair_queries"] == {
+        "holo": []
+    }
+    assert update_release.apply_release_update(plan_dir, workspace, **kwargs) == result
+    assert finalizations == [workspace]
 
 
 def test_release_update_runs_only_configured_search_databases(tmp_path, monkeypatch):

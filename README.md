@@ -7,7 +7,7 @@
 ---
 
 [![license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/plinder-org/plinder/blob/master/LICENSE.txt)
-[![publish](https://github.com/plinder-org/plinder/actions/workflows/main.yaml/badge.svg)](https://github.com/plinder-org/plinder/pkgs/container/plinder)
+[![publish](https://github.com/plinder-org/plinder/actions/workflows/main.yaml/badge.svg)](https://pypi.org/project/plinder/)
 [![website](https://img.shields.io/badge/website-plinder-blue.svg)](https://www.plinder.sh/)
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-2024.07.17.603955-blue.svg)](https://www.biorxiv.org/content/10.1101/2024.07.17.603955)
 [![docs](https://github.com/plinder-org/plinder/actions/workflows/docs.yaml/badge.svg)](https://plinder-org.github.io/plinder/)

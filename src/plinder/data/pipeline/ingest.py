@@ -63,7 +63,7 @@ def resolve_source_roots(
 
     Explicit arguments take precedence over environment variables. Relative
     configured paths are interpreted relative to the Plinder data directory so
-    the same configuration works in local and Metaflow deployments.
+    the same configuration works in local runs and Slurm jobs.
     """
 
     def resolve(

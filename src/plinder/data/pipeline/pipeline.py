@@ -17,11 +17,7 @@ LOG = setup_logger(__name__)
 
 class IngestPipeline:
     """
-    Mimic the required metaflow DAG pattern of
-        - scatter
-        - compute
-        - join
-    by convention in method names.
+    Configure pipeline stages using scatter, compute, and join methods.
 
     scatter methods return lists of lists of primitives
     compute methods may return something if intended to be joined
@@ -30,8 +26,8 @@ class IngestPipeline:
     Note
     ----
     business logic is implemented in tasks.py. The
-    Pipeline is merely an interface between configuration
-    and functions, which can be mirrored in metaflow.
+    Pipeline is an interface between configuration and task functions.
+    Slurm execution uses the scripts in scripts/slurm.
     """
 
     def __init__(

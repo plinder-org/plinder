@@ -155,7 +155,7 @@ class _get_config:
             args.append(DictConfig(OmegaConf.load(StringIO(config_contents))))
         try:
             # catchall for non-standard execution models
-            # e.g. in metaflow or jupyter
+            # e.g. in job runners or Jupyter
             cli = OmegaConf.from_cli(config_args)
             # omegaconf casts single int-like two_char_codes to int
             if cli.get("scatter", {}).get("two_char_codes") is not None:

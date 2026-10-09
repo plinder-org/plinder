@@ -1,6 +1,5 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-import ast
 import json
 import os
 from pathlib import Path
@@ -14,6 +13,7 @@ import pytest
 
 from plinder.core.scores.mapping import pack_residue_identities
 from plinder.core.utils import schemas
+from plinder.core.utils.files import write_json_atomic
 from plinder.data.annotations.get_similarity_scores import (
     SCORE_METRICS_METADATA_KEY,
     SCORE_THRESHOLDS_METADATA_KEY,
@@ -3080,6 +3080,60 @@ def test_dropped_queries_combine_mapping_and_scoring_stages(tmp_path) -> None:
     assert _score_batch(tmp_path, 0, 4) == ["4jkl"]
 
 
+@pytest.mark.parametrize(
+    "mapping_id,score_id,invalid",
+    [("2def", None, False), ("9zzz", None, True), (None, "2def", True)],
+)
+def test_dropped_queries_validate_each_stage_against_its_plan(
+    tmp_path, mapping_id, score_id, invalid
+) -> None:
+    from plinder.data.pipeline.score import (
+        DROPPED_QUERY_RELATIVE,
+        MANIFEST_RELATIVE,
+        PLAN_RELATIVE,
+        SCORE_WORK_RELATIVE,
+        _source_signature,
+        record_dropped_queries,
+    )
+
+    query_manifest = tmp_path / MANIFEST_RELATIVE
+    query_manifest.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc", "2def"]}).to_parquet(query_manifest, index=False)
+    pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(
+        tmp_path / SCORE_WORK_RELATIVE, index=False
+    )
+    write_json_atomic(
+        tmp_path / PLAN_RELATIVE, {"manifest": _source_signature(query_manifest)}
+    )
+    alignment_manifest = tmp_path / "alignments/manifest.json"
+    write_json_atomic(
+        alignment_manifest,
+        {
+            "skipped_queries": (
+                {mapping_id: {"reason": "raw_alignment_row_budget_exceeded"}}
+                if mapping_id
+                else {}
+            )
+        },
+    )
+    score_drops = tmp_path / "score-drops.parquet"
+    pd.DataFrame(
+        {"pdb_id": pd.Series([score_id] if score_id else [], dtype="str")}
+    ).to_parquet(score_drops, index=False)
+
+    if invalid:
+        with pytest.raises(ValueError, match="dropped queries are absent"):
+            record_dropped_queries(tmp_path, score_query_manifest=score_drops)
+        assert not (tmp_path / DROPPED_QUERY_RELATIVE).exists()
+    else:
+        report = record_dropped_queries(tmp_path, score_query_manifest=score_drops)
+        assert report["alignment_mapping"] == 1
+        assert report["derived_scoring"] == 0
+        assert pd.read_parquet(tmp_path / DROPPED_QUERY_RELATIVE)[
+            ["pdb_id", "stage"]
+        ].to_dict("records") == [{"pdb_id": "2def", "stage": "alignment_mapping"}]
+
+
 def test_ligand_3d_retries_require_and_reassemble_every_retry(tmp_path) -> None:
     from plinder.data.pipeline.score import (
         LIGAND_3D_RETRY_WORK_RELATIVE,
@@ -3619,8 +3673,9 @@ def test_ligand_3d_score_shard_with_no_pairs_is_ready(tmp_path) -> None:
     assert pq.ParquetFile(outputs[0]).metadata.num_rows == 0
 
 
+@pytest.mark.parametrize("has_pairs", [True, False])
 def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, has_pairs
 ) -> None:
     from plinder.data.pipeline.score import (
         SCORE_WORK_RELATIVE,
@@ -3645,7 +3700,7 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
             "ligand_asym_id": ["B", "Y"],
             "ligand_num_heavy_atoms": [10, 20],
             "ligand_is_proper": [True, True],
-            "ligand_is_shape_comparable": [True, True],
+            "ligand_is_shape_comparable": [has_pairs, has_pairs],
             "system_type": ["holo", "holo"],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
@@ -3672,11 +3727,12 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
         "protein_mapper": "foldseek",
         "pocket_qcov": 0.5,
     }
+    candidates = [candidate] if has_pairs else []
     pq.write_table(
-        pa.Table.from_pylist([candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
+        pa.Table.from_pylist(candidates, schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
         candidate_dir / "1abc.parquet",
     )
-    _write_ligand_pair_scores(tmp_path, "1abc", [candidate])
+    _write_ligand_pair_scores(tmp_path, "1abc", candidates)
     tasks.collate_ligand_3d_candidates(
         data_dir=tmp_path,
         shards=["ab"],
@@ -3701,10 +3757,11 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
         ]
     }
     pair.update({"shape": 0.8, "color": 0.6, "sucos_shape": 0.7})
-    pq.write_table(
-        pa.Table.from_pylist([pair], schema=schemas.LIGAND_3D_SCORE_SCHEMA),
-        pair_dir / "0.parquet",
-    )
+    if has_pairs:
+        pq.write_table(
+            pa.Table.from_pylist([pair], schema=schemas.LIGAND_3D_SCORE_SCHEMA),
+            pair_dir / "0.parquet",
+        )
     final_score = tmp_path / "scores/search_db=holo/ab.parquet"
     final_score.parent.mkdir(parents=True)
     pd.DataFrame(columns=schemas.PROTEIN_SIMILARITY_SCHEMA.names).to_parquet(
@@ -3717,12 +3774,12 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
 
     assert report == {
         "status": "complete",
-        "canonical_pair_count": 1,
-        "pair_batch_count": 1,
+        "canonical_pair_count": int(has_pairs),
+        "pair_batch_count": int(has_pairs),
         "query_shard_count": 1,
         "query_count": 1,
         "ligand_pair_score_shard_count": 1,
-        "ligand_pair_score_rows": 1,
+        "ligand_pair_score_rows": int(has_pairs),
     }
     assert (tmp_path / "scores/ligand_3d_pair_validation.json").is_file()
 
@@ -6926,154 +6983,6 @@ def test_v3_score_cli_accepts_apo_search_database(tmp_path):
         assert parsed.search_db == "apo"
 
 
-def test_metaflow_graph_uses_canonical_ligand_archive_stage():
-    repository = Path(__file__).resolve().parents[3]
-    flow_path = repository / "flows" / "data_ingest.py"
-    if not flow_path.is_file():
-        pytest.skip("Metaflow sources are not installed in wheel-only test layouts")
-    flow = flow_path.read_text()
-
-    assert "def scatter_structure_qc" not in flow
-    assert "self.pipeline.structure_qc" not in flow
-    assert "self.next(self.scatter_make_entries)" in flow
-    assert "def join_make_entries" in flow
-    assert "self.next(self.scatter_collate_entries)" in flow
-    assert "def collate_entries" in flow
-    assert "self.pipeline.collate_entries(self.input)" in flow
-    assert "self.pipeline.join_collate_entries" in flow
-    assert "self.next(self.scatter_make_canonical_ligand_archives)" in flow
-    assert "def make_canonical_ligand_archives" in flow
-    assert "self.next(self.finalize_ligand_archives)" in flow
-    assert "self.pipeline.finalize_ligand_archives()" in flow
-    assert "self.next(self.annotate_ligand_similarity)" in flow
-    assert "self.pipeline.annotate_ligand_similarity()" in flow
-    assert "self.next(self.make_ligand_mmp_pairs)" in flow
-    assert "self.pipeline.make_ligand_mmp_pairs" in flow
-    assert "self.next(self.make_ccd_ligand_dbs)" in flow
-    assert "self.pipeline.make_ccd_ligand_dbs" in flow
-    assert "self.next(self.scatter_collate_partitions)" in flow
-    assert "self.next(self.scatter_collate_alignments)" in flow
-    assert "self.pipeline.collate_alignments(self.input)" in flow
-    assert "self.next(self.finalize_alignments)" in flow
-    assert "self.pipeline.finalize_alignments()" in flow
-    assert "self.next(self.plan_score_batches)" in flow
-    assert "self.pipeline.plan_score_batches()" in flow
-    assert "self.next(self.plan_interface_scores)" in flow
-    assert "self.pipeline.plan_interface_scores()" in flow
-    assert "self.next(self.scatter_make_interface_scores)" in flow
-    assert "self.pipeline.make_interface_scores(self.input)" in flow
-    assert "self.pipeline.finalize_interface_scores()" in flow
-    assert "self.next(self.scatter_make_batch_scores)" in flow
-    assert "self.next(self.scatter_map_batch_alignments)" in flow
-    assert "self.pipeline.map_batch_alignments(self.input)" in flow
-    assert "self.pipeline.collate_ligand_3d_candidates(self.input)" in flow
-    assert "self.next(self.plan_ligand_3d_scores)" in flow
-    assert "self.pipeline.plan_ligand_3d_scores()" in flow
-    assert "self.pipeline.make_ligand_3d_scores(self.input)" in flow
-    assert "self.pipeline.collate_ligand_3d_scores(self.input)" in flow
-    assert "self.pipeline.merge_ligand_3d_scores(self.input)" in flow
-    assert "self.pipeline.finalize_scores()" in flow
-    assert "self.next(self.scatter_export_ligand_similarity_scores)" in flow
-    assert "self.pipeline.export_ligand_similarity_scores(self.input)" in flow
-    assert "self.pipeline.finalize_ligand_similarity_scores()" in flow
-    assert "self.next(self.make_linked_apo_structures)" in flow
-    assert "self.pipeline.make_linked_apo_structures()" in flow
-    assert "self.next(self.plan_clusters)" in flow
-    assert "self.pipeline.plan_clusters()" in flow
-    assert "self.next(self.scatter_make_symmetric_edge_fragments)" in flow
-    assert "self.pipeline.make_symmetric_edge_fragments(self.input)" in flow
-    assert "self.next(self.scatter_make_symmetric_edge_shards)" in flow
-    assert "self.pipeline.make_symmetric_edge_shards(self.input)" in flow
-    assert "self.next(self.scatter_make_component_reductions)" in flow
-    assert "self.pipeline.merge_component_reductions()" in flow
-    assert "self.next(self.scatter_make_set_covers)" in flow
-    assert "self.pipeline.make_set_covers(self.input)" in flow
-    assert "self.next(self.scatter_make_directed_set_covers)" in flow
-    assert "self.pipeline.make_directed_set_covers(self.input)" in flow
-    assert "self.next(self.summarize_clusters)" in flow
-    assert "self.pipeline.summarize_clusters()" in flow
-    assert "self.next(self.finalize_index)" in flow
-    assert "self.pipeline.finalize_index()" in flow
-    assert "make_mmp_index" not in flow
-    assert "PLINDER_METAFLOW_IMAGE" in flow
-    assert "v0.2.2-63-g71bd2d22" not in flow
-    assert 'PLINDER_RELEASE="2026-07"' not in flow
-
-    tree = ast.parse(flow)
-    flow_class = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "PlinderDataIngestFlow"
-    )
-    steps = {
-        node.name: node
-        for node in flow_class.body
-        if isinstance(node, ast.FunctionDef)
-        and any(
-            isinstance(decorator, ast.Name) and decorator.id == "step"
-            for decorator in node.decorator_list
-        )
-    }
-    pipeline_tree = ast.parse(
-        (repository / "src/plinder/data/pipeline/pipeline.py").read_text()
-    )
-    pipeline_class = next(
-        node
-        for node in pipeline_tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "IngestPipeline"
-    )
-    pipeline_methods = {
-        node.name for node in pipeline_class.body if isinstance(node, ast.FunctionDef)
-    }
-    called_methods = {
-        call.func.attr
-        for step_node in steps.values()
-        for call in ast.walk(step_node)
-        if isinstance(call, ast.Call)
-        and isinstance(call.func, ast.Attribute)
-        and isinstance(call.func.value, ast.Attribute)
-        and isinstance(call.func.value.value, ast.Name)
-        and call.func.value.value.id == "self"
-        and call.func.value.attr == "pipeline"
-    }
-    assert called_methods <= pipeline_methods
-    edges = {name: set() for name in steps}
-    for name, node in steps.items():
-        for call in (child for child in ast.walk(node) if isinstance(child, ast.Call)):
-            if not (
-                isinstance(call.func, ast.Attribute)
-                and call.func.attr == "next"
-                and isinstance(call.func.value, ast.Name)
-                and call.func.value.id == "self"
-            ):
-                continue
-            for argument in call.args:
-                if (
-                    isinstance(argument, ast.Attribute)
-                    and isinstance(argument.value, ast.Name)
-                    and argument.value.id == "self"
-                ):
-                    edges[name].add(argument.attr)
-
-    assert edges["start"] == {"scatter_make_entries"}
-    assert edges["join_collate_entries"] == {"make_protein_sequence_clusters"}
-    assert edges["make_protein_sequence_clusters"] == {"make_dbs"}
-    assert edges["make_dbs"] == {"make_protein_structure_clusters"}
-    assert edges["make_protein_structure_clusters"] == {
-        "scatter_make_canonical_ligand_archives"
-    }
-
-    reachable = {"start"}
-    pending = ["start"]
-    while pending:
-        for target in edges[pending.pop()]:
-            assert target in steps
-            if target not in reachable:
-                reachable.add(target)
-                pending.append(target)
-    assert reachable == set(steps)
-
-
 def test_v3_collation_slurm_uses_local_scratch_and_long_qos_for_global_steps():
     repository = Path(__file__).resolve().parents[3]
     script_path = repository / "scripts" / "slurm" / "collate_v3_shards.sbatch"
@@ -7102,7 +7011,7 @@ def test_ingest_configs_use_current_schema_and_stages():
     from plinder.data.pipeline.config import get_config
 
     repository = Path(__file__).resolve().parents[3]
-    config_dir = repository / "flows" / "configs" / "ingest"
+    config_dir = repository / "scripts" / "slurm" / "configs" / "ingest"
     if not config_dir.is_dir():
         pytest.skip("ingest configs are not installed in wheel-only test layouts")
     ingest_configs = list(config_dir.glob("*.yaml"))

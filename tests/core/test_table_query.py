@@ -35,6 +35,7 @@ def local_release(tmp_path: Path) -> PlinderRelease:
                 "3ghi__1__1.C__1.N",
             ],
             "entry_pdb_id": ["1abc", "2def", "3ghi"],
+            "ligand_ccd_code": ["ATP", "ADP", "NA"],
             "entry_resolution": [99.0, 99.0, 99.0],
             "entry_release_date": ["1900-01-01"] * 3,
         },
@@ -509,6 +510,36 @@ def test_query_ligand_mmp_pairs(local_release: PlinderRelease) -> None:
     ]
 
 
+@pytest.mark.parametrize("include_identifiers", [False, True])
+def test_residue_queries_join_annotation_and_membership(
+    local_release: PlinderRelease, include_identifiers: bool
+) -> None:
+    _write_table(
+        local_release,
+        "ligand_pocket_residues",
+        {
+            "ligand_id": ["1abc__1__1.L"],
+            "system_id": ["1abc__1__1.A__1.L"],
+            "entry_pdb_id": ["1abc"],
+            "residue_label_seq_id": [10],
+        },
+    )
+    expected = {
+        "ligand_id": "1abc__1__1.L",
+        "ligand_ccd_code": "ATP",
+        "pocket_cluster": "cluster_a",
+    }
+    if include_identifiers:
+        expected.update(system_id="1abc__1__1.A__1.L", entry_pdb_id="1abc")
+
+    result = query_table(
+        "ligand_pocket_residues",
+        columns=list(expected),
+        release=local_release,
+    )
+    assert result.to_dict("records") == [expected]
+
+
 def test_query_table_rejects_unregistered_related_tables(
     local_release: PlinderRelease,
 ) -> None:
@@ -552,7 +583,7 @@ def test_query_table_requires_a_choice_for_ambiguous_related_columns(
     _write_table(
         release,
         "entry_sources",
-        {"entry_pdb_id": ["1abc"], "shared_value": [2]},
+        {"entry_pdb_id": ["1abc"], "shared_value": [2], "source_only": [4]},
     )
 
     with pytest.raises(ValueError, match="available from multiple related tables"):
@@ -584,3 +615,10 @@ def test_query_table_requires_a_choice_for_ambiguous_related_columns(
     assert selected.to_dict("records") == [
         {"ligand_id": "1abc__1__1.L", "shared_value": 1}
     ]
+
+    with pytest.raises(ValueError, match="joined column 'shared_value'"):
+        query_table(
+            "annotation",
+            columns=["ligand_id", "metadata_only", "source_only"],
+            release=release,
+        )

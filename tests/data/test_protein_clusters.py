@@ -144,7 +144,7 @@ def test_segmented_protein_config_runs_sequence_clustering(tmp_path, monkeypatch
 
     config = (
         Path(__file__).resolve().parents[2]
-        / "flows/configs/ingest/make_protein_scores.yaml"
+        / "scripts/slurm/configs/ingest/make_protein_scores.yaml"
     )
     if not config.is_file():
         pytest.skip("ingest configs are not installed in wheel-only test layouts")
@@ -323,7 +323,7 @@ def test_segmented_protein_config_runs_structure_clustering(tmp_path, monkeypatc
 
     config = (
         Path(__file__).resolve().parents[2]
-        / "flows/configs/ingest/make_protein_scores.yaml"
+        / "scripts/slurm/configs/ingest/make_protein_scores.yaml"
     )
     if not config.is_file():
         pytest.skip("ingest configs are not installed in wheel-only test layouts")

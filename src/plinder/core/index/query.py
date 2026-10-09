@@ -396,7 +396,9 @@ def query_table(
         for name in visible_columns:
             if name in side_key_columns:
                 continue
-            if name in joined_column_owner:
+            # Related tables can repeat base identifiers such as system_id.
+            # Columns supplied only by multiple side tables remain ambiguous.
+            if name in joined_column_owner and name not in schemas[table_name]:
                 previous = joined_column_owner[name]
                 raise ValueError(
                     f"joined column {name!r} is provided by both {previous!r} "

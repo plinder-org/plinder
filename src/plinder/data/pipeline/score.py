@@ -1525,7 +1525,14 @@ def record_dropped_queries(
             "pdb_id"
         ].astype(str)
     )
-    unexpected = sorted((mapping_ids | score_ids).difference(planned_ids))
+    protein_query_ids = set(
+        pd.read_parquet(data_dir / MANIFEST_RELATIVE, columns=["pdb_id"])[
+            "pdb_id"
+        ].astype(str)
+    )
+    unexpected = sorted(
+        mapping_ids.difference(protein_query_ids) | score_ids.difference(planned_ids)
+    )
     if unexpected:
         raise ValueError(
             f"dropped queries are absent from the scoring plan: {unexpected[:10]}"
@@ -3903,6 +3910,12 @@ def finalize_ligand_3d_artifacts(data_dir: Path) -> dict[str, Any]:
             ]
         )
         pair_paths_sql = ", ".join(f"'{path.as_posix()}'" for path in pair_paths)
+        observed_sql = (
+            f"SELECT {pair_keys} FROM read_parquet([{pair_paths_sql}])"
+            if pair_paths
+            else f"SELECT {pair_keys} FROM read_parquet('{work_path.as_posix()}') "
+            "WHERE FALSE"
+        )
         LOG.info("score finalization: starting canonical-pair coverage query")
         phase_started = perf_counter()
         coverage = (
@@ -3913,8 +3926,7 @@ def finalize_ligand_3d_artifacts(data_dir: Path) -> dict[str, Any]:
                     SELECT {pair_keys}
                     FROM read_parquet('{work_path.as_posix()}')
                 ), observed AS (
-                    SELECT {pair_keys}
-                    FROM read_parquet([{pair_paths_sql}])
+                    {observed_sql}
                 )
                 SELECT
                     (SELECT count(*) FROM expected) AS expected_rows,

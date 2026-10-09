@@ -440,7 +440,7 @@ def make_entries(
         cif_root=cif_root,
         validation_root=validation_root,
         force=force_update,
-        job_id=f"metaflow-{hash_id}",
+        job_id=f"ingest-{hash_id}",
         annotation_cfg=annotation_cfg,
         entry_cfg=entry_cfg,
         interface_cfg=interface_cfg,
@@ -4439,7 +4439,7 @@ def scatter_collate_alignments(*, data_dir: Path) -> list[list[str]]:
             if not path.name.endswith(".tmp.parquet")
         }
     )
-    # Preserve a join branch when there is no work, as required by Metaflow.
+    # Preserve a no-op branch for callers using the scatter/compute/join interface.
     return [[shard] for shard in shards] or [[]]
 
 

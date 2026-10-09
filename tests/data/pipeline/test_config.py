@@ -172,7 +172,7 @@ def test_alignment_mapping_row_budget_must_be_positive() -> None:
         config.ScorerConfig(max_alignment_rows_per_query=0)
 
 
-def test_get_config_metaflow(tmp_path):
+def test_get_config_merges_file_and_contents(tmp_path):
     file = tmp_path / "conf.yaml"
     file.write_text(
         dedent(

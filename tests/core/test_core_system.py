@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import numpy as np
 import pandas as pd
@@ -151,6 +153,58 @@ def test_plinder_system_extracts_canonical_ligand_archive(
             write_plinder_mount / "ligand_archives" / "1avd/ligand_files/C.sdf"
         ).as_posix()
     }
+
+
+def test_canonical_ligand_extraction_supports_concurrent_workers(tmp_path, monkeypatch):
+    from plinder.core.index.system import _extract_packed_ligand_sdfs
+
+    archive = tmp_path / "gr.parquet"
+    content = b"canonical ASU ligand"
+    pd.DataFrame(
+        {"pdb_id": ["3grt"], "ligand_asym_id": ["B"], "sdf": [content]}
+    ).to_parquet(archive, index=False)
+    written = Barrier(2)
+    write_bytes = Path.write_bytes
+
+    def write_together(path, data):
+        result = write_bytes(path, data)
+        if path.parent.name == "ligand_files":
+            written.wait(timeout=10)
+        return result
+
+    monkeypatch.setattr(Path, "write_bytes", write_together)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(
+                _extract_packed_ligand_sdfs,
+                archive=archive,
+                pdb_id="3grt",
+                asym_ids={"B"},
+            )
+            for _ in range(2)
+        ]
+        folders = [future.result() for future in futures]
+
+    assert folders[0] == folders[1]
+    assert (folders[0] / "B.sdf").read_bytes() == content
+    assert list(folders[0].iterdir()) == [folders[0] / "B.sdf"]
+
+
+def test_canonical_ligand_extraction_cleans_up_failed_writes(tmp_path, monkeypatch):
+    from plinder.core.index.system import _extract_packed_ligand_sdfs
+
+    archive = tmp_path / "gr.parquet"
+    pd.DataFrame(
+        {"pdb_id": ["3grt"], "ligand_asym_id": ["B"], "sdf": [b"ligand"]}
+    ).to_parquet(archive, index=False)
+
+    def fail_replace(*_args):
+        raise OSError("replacement failed")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="replacement failed"):
+        _extract_packed_ligand_sdfs(archive=archive, pdb_id="3grt", asym_ids={"B"})
+    assert list((tmp_path / "3grt/ligand_files").iterdir()) == []
 
 
 def test_plinder_structure(cached_plinder_system):

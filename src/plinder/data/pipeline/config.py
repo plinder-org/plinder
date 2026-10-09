@@ -135,7 +135,7 @@ class SourceConfig:
     """Locations of the source archives consumed by entry ingest.
 
     Empty roots use ``PLINDER_PDB_NEXTGEN_ROOT`` and
-    ``PLINDER_VALIDATION_ROOT`` when set, then fall back to the Metaflow-local
+    ``PLINDER_VALIDATION_ROOT`` when set, then fall back to the release-local
     ``ingest`` and ``reports`` directories.
     """
 

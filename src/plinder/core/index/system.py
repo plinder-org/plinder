@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import pandas as pd
 
@@ -66,9 +67,12 @@ def _extract_packed_ligand_sdfs(
     folder.mkdir(exist_ok=True, parents=True)
     for row in packed.itertuples(index=False):
         target = folder / f"{row.ligand_asym_id}.sdf"
-        temporary = target.with_suffix(".tmp.sdf")
-        temporary.write_bytes(row.sdf)
-        temporary.replace(target)
+        temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(row.sdf)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
     return folder
 
 

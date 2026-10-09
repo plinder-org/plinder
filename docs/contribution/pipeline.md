@@ -1,9 +1,9 @@
 # Pipeline
 
-We outline conceptually the steps of the end-to-end pipeline in the following sections.
-We briefly describe some of the abstractions that are used to orchestrate the entire
-pipeline, but they are to be considered an implementation detail because they rely
-on our choice of orchestration framework for job execution.
+The data pipeline runs as Slurm jobs using the scripts in
+[`scripts/slurm`](https://github.com/plinder-org/plinder/tree/main/scripts/slurm).
+The Slurm runbook describes job submission, array sizing, dependencies, and
+final release assembly. The following sections describe the individual stages.
 
 ![workflow](workflow.png)
 

@@ -76,7 +76,7 @@ def test_segmented_ligand_ingest_runs_mhfp6_unless_disabled(tmp_path, mode):
 
     config_path = (
         Path(__file__).resolve().parents[3]
-        / "flows/configs/ingest/make_entries_ligands.yaml"
+        / "scripts/slurm/configs/ingest/make_entries_ligands.yaml"
     )
     if not config_path.is_file():
         pytest.skip("ingest configs are not installed in wheel-only test layouts")
