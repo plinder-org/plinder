@@ -149,6 +149,7 @@ html_theme_options = {
 }
 html_sidebars = {
     # No primary sidebar for these pages
+    "tutorial/**": [],
     "dataset": [],
     "evaluation": [],
     "citation": [],

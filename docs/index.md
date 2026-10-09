@@ -11,7 +11,7 @@ html_theme.sidebar_secondary.remove: true
 Resource**: a comprehensive, annotated, high-quality resource for training and
 evaluating protein-ligand and protein-protein structure models.
 
-- \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
+- 611,930 protein–ligand systems, 803,190 proper ligands, and 3,811,623 protein–protein interfaces
 - Ligand and protein-interface annotations plus compact entry, chain, and representative tables
 - Automated curation pipeline to keep up with the PDB
 - Reusable ligand, pocket, and protein-interface similarities and representative assignments
@@ -37,7 +37,7 @@ Install PLINDER, select a release, and continue to the runnable guides.
 
 <div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-database"></i></div>
 
-Download release files and query columns across the ligand, interface,
+Query columns across the ligand, interface,
 entry, chain, and representative tables.
 :::::
 
@@ -86,6 +86,5 @@ dataset
 evaluation
 api/index
 contribution/index
-migration/http
 citation
 :::
