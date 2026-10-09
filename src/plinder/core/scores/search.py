@@ -30,7 +30,7 @@ def search(
     *,
     output_dir: str | Path,
     release: PlinderRelease | None = None,
-    mode: Literal["auto", "pockets", "ligands", "interfaces", "both"] = "auto",
+    mode: Literal["auto", "all", "pockets", "ligands", "interfaces"] = "auto",
     backends: Iterable[str] | None = None,
     threads: int = 1,
     search_config: CustomProteinSearchConfig | None = None,
@@ -44,12 +44,20 @@ def search(
     A receptor and its SDFs share an input ID; paths are relative to the table.
     Complete mmCIFs use an empty ligand_path. ``reference_id`` is ignored here.
 
-    For ligand-free queries, pass a FASTA, one PDB/mmCIF, or a folder of those
-    structures. FASTA searches use MMseqs; structure searches use Foldseek and
-    MMseqs by default. ``mode='pockets'`` compares protein/pocket features,
-    ``'ligands'`` includes ligand similarities, and ``'interfaces'`` includes
-    protein interfaces. ``'both'`` includes both; ``'auto'`` uses applicable
-    features (ligand comparisons require a table).
+    Pass a FASTA, one PDB/mmCIF, a structure folder, or a table pairing receptors
+    with ligand SDFs. FASTA searches use MMseqs2; structures use Foldseek and
+    MMseqs2 by default. Every search returns protein-chain hits.
+
+    ``'pockets'`` maps PLINDER ligand pockets onto similar regions of your
+    proteins, ignoring query ligands. ``'ligands'`` also compares query ligands
+    and their interactions. ``'interfaces'`` maps PLINDER interface sites onto
+    similar regions of each input chain, and also compares complete interfaces
+    when the input contains interacting chains.
+    ``'auto'`` (the default) runs the comparisons supported by the input;
+    ``'all'`` selects all feature families, skipping unavailable comparisons.
+    FASTA supports
+    pocket and interface-site discovery, but not ligand or complete-interface
+    comparisons.
 
     PDB receptors contribute amino-acid residues, including modified amino acids;
     other PDB components are omitted. Supply ligand poses through ``ligand_path``.
@@ -61,14 +69,19 @@ def search(
     With ``include_monomers=True``, chain hits also cover proteins outside
     ligand pockets and protein interfaces. Pocket and interface scores still
     use their own targets.
+    ``interface_side_scores`` locates potential interface sites on input chains;
+    its coverage and identity percentages use the entire known interface side
+    as the denominator. ``interface_scores`` compares two-chain interfaces and
+    is absent for monomer inputs. Site matches do not establish that a protein
+    binds the partner observed in the matched PLINDER interface.
     ``search_config`` controls search filters. Its shared ``evalue`` defaults to
     0.01; ``foldseek_evalue``, ``mmseqs_evalue`` and ``steam_evalue`` override it
     independently for their respective backends.
     Input IDs become custom structure IDs in these outputs. Generated ligand
     chain IDs map to the original SDF paths in ``inputs/<input_id>.ligands.tsv``.
     """
-    if mode not in {"auto", "pockets", "ligands", "interfaces", "both"}:
-        raise ValueError("mode must be auto, pockets, ligands, interfaces or both")
+    if mode not in {"auto", "pockets", "ligands", "interfaces", "all"}:
+        raise ValueError("mode must be auto, pockets, ligands, interfaces or all")
     output_dir = Path(output_dir).resolve()
     common: dict[str, Any] = dict(
         work_dir=output_dir,
@@ -83,21 +96,20 @@ def search(
     if path is not None and path.name.lower().endswith(
         (".fasta", ".fa", ".faa", ".fasta.gz", ".fa.gz", ".faa.gz")
     ):
-        if mode not in {"auto", "pockets"}:
+        if mode == "ligands":
             raise ValueError(
-                "FASTA inputs support pocket search; use structures for ligand/interface comparisons"
+                "FASTA inputs support pocket and interface-site discovery; use structures for ligand comparisons"
             )
         return score_custom_sequence_file(
             path,
             backends=tuple(backends) if backends is not None else ("mmseqs",),
+            include_interfaces=mode in {"auto", "interfaces", "all"},
             **common,
         )
     is_table = path is None or path.suffix.lower() in {".csv", ".tsv", ".parquet"}
     if is_table:
         structures = read_structure_table(inputs)
     else:
-        if mode in {"ligands", "both"}:
-            raise ValueError("Use an input table for ligand searches")
         assert path is not None
         rows = []
         for file in find_structure_files(path):
@@ -108,7 +120,7 @@ def search(
         if len({row["input_id"] for row in rows}) != len(rows):
             raise ValueError("Structure filenames must have unique basenames")
         structures = read_structure_table(pd.DataFrame(rows))
-    include_ligands = is_table and mode in {"auto", "ligands", "both"}
+    include_ligands = mode in {"auto", "ligands", "all"}
     sources = []
     for input_id, structure in structures.items():
         original = Path(structure.coordinates)
@@ -130,7 +142,7 @@ def search(
         backends=tuple(backends)
         if backends is not None
         else (("mmseqs",) if plinder_entry_ids is not None else CIF_SEARCH_BACKENDS),
-        include_ligands=None if mode == "auto" and include_ligands else include_ligands,
-        include_interfaces=None if mode == "auto" else mode in {"interfaces", "both"},
+        include_ligands=None if mode in {"auto", "all"} else include_ligands,
+        include_interfaces=mode in {"auto", "interfaces", "all"},
         **common,
     )
