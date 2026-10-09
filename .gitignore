@@ -149,6 +149,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.claude
 
 # Spyder project settings
 .spyderproject
@@ -173,7 +174,6 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
-.metaflow/
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
@@ -186,9 +186,14 @@ cython_debug/
 */*/DS_Store
 
 src/plinder-data/plinder/data/artifacts
-#src/plinder-core
 *.bak*
 *.1.*
 tests/xx
 tests/test_data/plinder/mount/systems/*/
+tmp_foldseek
+tmp_mmseqs
 artifacts
+logs/
+
+# uv lockfile: not committed; CI resolves the latest versions allowed by pyproject.toml
+uv.lock

@@ -1,0 +1,6 @@
+Name	Type	Description
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+chain_asym_id	string	Chain asymmetric id
+chain_auth_id	string	Chain author id
+selected_residue_numbers	list<element: int32>	Source-mmCIF residue numbers selected by any ligand pocket or protein interface, ordered by selected_residue_indices
+selected_residue_indices	list<element: int32>	Zero-based resolved-chain indices corresponding positionally to selected_residue_numbers

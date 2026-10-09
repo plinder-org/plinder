@@ -1,0 +1,5 @@
+Name	Type	Description
+representative_system_id	string	System ID selected as the representative for a ligand pocket or protein interface
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+half_interface_1_id	string	First half-interface of this representative
+half_interface_2_id	string	Second half-interface of this representative
