@@ -175,6 +175,7 @@ def _validate_gzipped_mmcif(
     path: Path,
     *,
     expected_revision: PDBRevision | None = None,
+    allow_newer_minor: bool = False,
 ) -> None:
     """Reject corrupt/non-mmCIF data and revision mismatches."""
     try:
@@ -186,7 +187,12 @@ def _validate_gzipped_mmcif(
         raise ValueError(f"downloaded file is not an mmCIF: {path}")
     if expected_revision is not None:
         actual_revision = _mmcif_revision(path)
-        if actual_revision != expected_revision:
+        compatible = (
+            allow_newer_minor
+            and actual_revision[0] == expected_revision[0]
+            and actual_revision[1] >= expected_revision[1]
+        )
+        if actual_revision != expected_revision and not compatible:
             raise ValueError(
                 f"source mmCIF revision mismatch for {path}: expected "
                 f"{expected_revision[0]}.{expected_revision[1]}, found "
@@ -200,6 +206,7 @@ def _download_versioned_mmcif(
     destination: Path,
     pdb_id: str,
     revision: PDBRevision,
+    allow_newer_minor: bool = False,
 ) -> None:
     """Download one mmCIF atomically, retrying only transient failures."""
     major, minor = revision
@@ -241,6 +248,7 @@ def _download_versioned_mmcif(
                 _validate_gzipped_mmcif(
                     temporary,
                     expected_revision=revision,
+                    allow_newer_minor=allow_newer_minor,
                 )
                 temporary.replace(destination)
                 return
@@ -272,7 +280,12 @@ def get_pdb_mmcif(
     manifest_path: Path | str | None = None,
     base_url: str = WWPDB_VERSIONED_MMCIF_URL,
 ) -> Path:
-    """Return the release-pinned source mmCIF, downloading it when allowed.
+    """Return a source mmCIF from the release-pinned major revision.
+
+    Prefer the exact pinned revision. If wwPDB no longer retains that minor
+    revision, use its latest minor revision within the same major version.
+    wwPDB requires a major increment for coordinate, sequence, and chemical
+    identity changes. Exact and same-major downloads have separate cache paths.
 
     Online calls populate the release-local cache atomically.  In offline mode
     the function performs no network or filesystem writes: a valid cached file
@@ -286,18 +299,23 @@ def get_pdb_mmcif(
         cache_dir=cache_dir,
         revision=revision,
     )
-    cached = False
-    if destination.is_file():
-        try:
-            _validate_gzipped_mmcif(
-                destination,
-                expected_revision=revision,
-            )
-            cached = True
-        except ValueError:
-            cached = False
-    if cached and (not force_update or is_offline()):
-        return destination
+    major, minor = revision
+    major_destination = destination.with_name(f"{pdb_id}_v{major}.cif.gz")
+    for candidate, allow_newer_minor in (
+        (destination, False),
+        (major_destination, True),
+    ):
+        if candidate.is_file():
+            try:
+                _validate_gzipped_mmcif(
+                    candidate,
+                    expected_revision=revision,
+                    allow_newer_minor=allow_newer_minor,
+                )
+            except ValueError:
+                continue
+            if not force_update or is_offline():
+                return candidate
     if is_offline():
         raise FileNotFoundError(
             f"No valid cached source mmCIF for {pdb_id} at {destination}. "
@@ -306,16 +324,41 @@ def get_pdb_mmcif(
         )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    major, minor = revision
     extended_id = _extended_pdb_id(pdb_id)
     filename = f"{extended_id}_xyz_v{major}-{minor}.cif.gz"
     url = f"{base_url.rstrip('/')}/{pdb_id[-3:-1]}/{extended_id}/{filename}"
-    _download_versioned_mmcif(
-        url=url,
-        destination=destination,
-        pdb_id=pdb_id,
-        revision=revision,
-    )
+    try:
+        _download_versioned_mmcif(
+            url=url,
+            destination=destination,
+            pdb_id=pdb_id,
+            revision=revision,
+        )
+    except FileNotFoundError:
+        LOG.warning(
+            "source mmCIF %s revision %d.%d is unavailable; trying the latest "
+            "minor revision of major version %d",
+            pdb_id,
+            major,
+            minor,
+            major,
+        )
+        major_base_url = base_url.rstrip("/").replace(
+            "/data/entries", "/views/all/coordinates/mmcif"
+        )
+        url = (
+            f"{major_base_url}/{pdb_id[-3:-1]}/{extended_id}/"
+            f"{extended_id}_xyz_v{major}.cif.gz"
+        )
+        _download_versioned_mmcif(
+            url=url,
+            destination=major_destination,
+            pdb_id=pdb_id,
+            revision=revision,
+            allow_newer_minor=True,
+        )
+        destination = major_destination
+        major, minor = _mmcif_revision(destination)
     LOG.info(
         f"cached wwPDB source mmCIF {pdb_id} revision {major}.{minor} at {destination}"
     )
