@@ -8,7 +8,7 @@ import pandas as pd
 
 from plinder.core.index.query import query_table
 from plinder.core.release import PlinderRelease
-from plinder.core.scores.query import Filter, Filters, read_score_table
+from plinder.core.scores.query import Filter, Filters, query_score_table
 from plinder.core.utils.dec import timeit
 
 
@@ -44,9 +44,9 @@ def query_ligand_similarity(
     df : pd.DataFrame
         The ligand similarity results.
     """
-    dataset = (release or PlinderRelease()).fetch("ligand_similarity_scores")
-    return read_score_table(
-        dataset,
+    return query_score_table(
+        "ligand_similarity_scores",
+        release=release or PlinderRelease(),
         columns=columns,
         filters=filters,
     )
@@ -60,8 +60,12 @@ def query_ligand_chemical_similarity(
     release: PlinderRelease | None = None,
 ) -> pd.DataFrame:
     """Query ECFP4 Tanimoto similarities between canonical ligand SMILES."""
-    dataset = (release or PlinderRelease()).fetch("ligand_scores")
-    return read_score_table(dataset, columns=columns, filters=filters)
+    return query_score_table(
+        "ligand_scores",
+        release=release or PlinderRelease(),
+        columns=columns,
+        filters=filters,
+    )
 
 
 @timeit
@@ -136,7 +140,6 @@ def cross_ligand_chemical_similarity(
     """
     query_ids = _ligand_ids(query_ligands)
     target_ids = _ligand_ids(target_ligands)
-    dataset = (release or PlinderRelease()).fetch("ligand_scores")
     if metric is None:
         metric = "tanimoto_similarity_ecfp4_1024"
     filters: list[list[Filter]] = [
@@ -150,8 +153,9 @@ def cross_ligand_chemical_similarity(
         ],
     ]
     columns = ["query_ligand_id", "target_ligand_id", metric]
-    similarities = read_score_table(
-        dataset,
+    similarities = query_score_table(
+        "ligand_scores",
+        release=release or PlinderRelease(),
         columns=columns,
         filters=filters,
     )

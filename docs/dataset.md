@@ -83,6 +83,55 @@ group. APIs fetch missing optional files when they need them unless offline
 mode is enabled. Source PDB mmCIFs are separate: they are fetched per PDB entry
 during reconstruction and are not part of the bulk download.
 
+### Selective score downloads
+
+Releases with a `score_store/<artifact>/manifest.json` support downloading
+only the score shards needed by a query. The score-query APIs and columns
+are unchanged. For example, filter on `query_ligand_id`, `query_system`,
+`query_half_interface_id`, or `query_entry` using `==` or `in` to select
+query shards. Chemical ligand scores use numeric ligand-ID ranges.
+Row order is not guaranteed; sort the result explicitly when order matters.
+
+Target-only equality and membership queries use an exact target-to-shard
+index. Scores remain directed: a target lookup does not substitute the
+reverse pair's score. Queries with only a score threshold, or many widely
+distributed IDs, can still need most of the release. Column projection
+reduces local reads, but whole selected shard files are downloaded.
+
+The client checks for this manifest before fetching score data. Until the
+new exports are published, it reads the existing release layout, which
+can require a large first download. A missing shard in a manifest-backed
+release is an error, not a reason to silently download a legacy table.
+Offline use requires the manifest and every shard needed by the query.
+
+Release maintainers can repackage finalized scores without recomputing
+them or changing the source files:
+
+```bash
+python -m plinder.data.pipeline.score_store WORKING_RELEASE STAGING_RELEASE \
+    --threads 2 --memory-limit 2GB
+```
+
+Run this release-wide operation on a compute node with adequate temporary
+disk space. It writes only `STAGING_RELEASE/score_store/`, refuses to
+overwrite an existing artifact, and installs each artifact atomically.
+The memory limit controls the engine's working-memory budget, not total
+process RAM; allow additional headroom and disk space for external sorts.
+Each query bucket is sorted in a fresh engine session. Target-routing
+indices are deduplicated per query bucket and finalized in eight groups,
+without a release-wide in-memory sort or deduplication.
+Exports retain all rows (including duplicate rows), original columns and
+types, and directionality. Each bucket is sorted and checked using row
+counts and order-independent row fingerprints. The manifest records the
+total row count, schema, fingerprint, and all data/index file paths.
+
+For deployment, place the completed `score_store/` beside the other finalized
+artifacts in a separate working release tree, then run
+`plinder_prepare_release` as usual. The public-release allowlist includes
+only completed, manifest-listed score-store files. Keep the existing score
+artifacts for older clients. Publishing the new files is a separate step;
+running the exporter never uploads anything.
+
 (annotation-table-target)=
 (annotation-tables-index)=
 

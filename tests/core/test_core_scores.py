@@ -5,12 +5,72 @@ import pytest
 
 from plinder.core import PlinderRelease, query_table, scores
 from plinder.core.scores import ligand as ligand_module
+from plinder.data.pipeline.score_store import export_score_store
 
 
 def test_custom_scoring_public_api():
     assert callable(scores.score_custom_cif_files)
     assert callable(scores.score_custom_sequence_file)
     assert scores.CustomProteinSearchConfig().max_seqs == 10_000
+
+
+@pytest.mark.parametrize(
+    "artifact,query,filters,options",
+    [
+        (
+            "ligand_similarity_scores",
+            scores.query_ligand_similarity,
+            [("query_ligand_id", "==", "query__1.A")],
+            {},
+        ),
+        (
+            "interface_similarity_scores",
+            scores.query_interface_similarity,
+            [("query_system", "==", "query_interface")],
+            {},
+        ),
+        (
+            "interface_half_similarity_scores",
+            scores.query_half_interface_similarity,
+            [("target_half_interface_id", "==", "target_interface::side=2")],
+            {},
+        ),
+        (
+            "protein_similarity_scores",
+            scores.query_protein_similarity,
+            [("query_entry", "==", "1abc")],
+            {},
+        ),
+        (
+            "protein_similarity_scores",
+            scores.query_protein_similarity,
+            [("target_entry", "==", "1abc")],
+            {"include_monomers": True},
+        ),
+        (
+            "ligand_scores",
+            scores.query_ligand_chemical_similarity,
+            [("query_ligand_id", "==", 29)],
+            {},
+        ),
+    ],
+)
+def test_public_queries_use_partitioned_exports(
+    similarity_release, tmp_path, artifact, query, filters, options
+):
+    output = tmp_path / "optimized"
+    export_score_store(similarity_release.data_dir, output, artifact)
+    if options.get("include_monomers"):
+        export_score_store(
+            similarity_release.data_dir, output, "monomer_similarity_scores"
+        )
+    expected = query(release=similarity_release, filters=filters, **options)
+    actual = query(release=PlinderRelease(output), filters=filters, **options)
+    columns = list(expected.columns)
+    pd.testing.assert_frame_equal(
+        expected.sort_values(columns).reset_index(drop=True),
+        actual.sort_values(columns).reset_index(drop=True),
+    )
 
 
 @pytest.fixture

@@ -12,7 +12,7 @@ import pandas as pd
 from plinder.core.release import PlinderRelease
 from plinder.core.scores.entries import InterfaceView
 from plinder.core.scores.mapping import unpack_residue_identities
-from plinder.core.scores.query import Filters, read_score_table
+from plinder.core.scores.query import Filters, query_score_table
 from plinder.core.utils.dec import timeit
 
 INTERFACE_SIDE_COLUMNS = [
@@ -135,8 +135,12 @@ def query_interface_similarity(
     release: PlinderRelease | None = None,
 ) -> pd.DataFrame:
     """Query complete directed protein-interface similarities."""
-    dataset = (release or PlinderRelease()).fetch("interface_similarity_scores")
-    return read_score_table(dataset, columns=columns, filters=filters)
+    return query_score_table(
+        "interface_similarity_scores",
+        release=release or PlinderRelease(),
+        columns=columns,
+        filters=filters,
+    )
 
 
 @timeit
@@ -147,8 +151,12 @@ def query_half_interface_similarity(
     release: PlinderRelease | None = None,
 ) -> pd.DataFrame:
     """Query directed coverage between individual interface sides."""
-    dataset = (release or PlinderRelease()).fetch("interface_half_similarity_scores")
-    return read_score_table(dataset, columns=columns, filters=filters)
+    return query_score_table(
+        "interface_half_similarity_scores",
+        release=release or PlinderRelease(),
+        columns=columns,
+        filters=filters,
+    )
 
 
 __all__ = ["query_interface_similarity", "query_half_interface_similarity"]

@@ -40,6 +40,8 @@ def _release_file(
 
 
 RELEASE_PATHS = {
+    "score_store": "score_store",
+    "score_store_manifest": "score_store/{artifact}/manifest.json",
     "annotation_table": "index/annotation_table.parquet",
     "system_validation": "index/system_validation.parquet",
     "entry_chains": "index/entry_chains.parquet",
