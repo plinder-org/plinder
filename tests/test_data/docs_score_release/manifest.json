@@ -1,0 +1,163 @@
+{
+  "release": "2026-09",
+  "description": "Real release rows, not synthetic scores. Bounded integration-test input for the score and representative notebooks, not a standalone release or benchmark.",
+  "entries": [
+    "4agc",
+    "4agi",
+    "5h47",
+    "7cm8",
+    "7eek"
+  ],
+  "files": [
+    {
+      "path": "ligand_sampling/directed_set_cover/metric=pocket_qcov/threshold=70.parquet",
+      "rows": 1,
+      "selection": "4agi__1__1.R assignment at pocket_qcov=70",
+      "sha256": "f65d8844d3441cd1eed54b82309c53c94b3acc68e9fb4fd3bfca7b0e8064bc39"
+    },
+    {
+      "path": "index/annotation_table.parquet",
+      "rows": 101,
+      "selection": "example entries and cover representative entries",
+      "sha256": "8d06c60b06fb8d9c81e8f841fa0110eeb5d72caff5e365096da793467c67ac23"
+    },
+    {
+      "path": "index/interface_annotation_table.parquet",
+      "rows": 3,
+      "selection": "example entries",
+      "sha256": "4141ddc278ffb7d39dfa8ddb34bbf005cf0e619f25e3082c063dc2742cce27a4"
+    },
+    {
+      "path": "index/entry_metadata.parquet",
+      "rows": 5,
+      "selection": "entry_pdb_id in example subset",
+      "sha256": "6ef624e18232705ec7085f8d59a717d4cd9dc2eadddc734369917b2c54669abd"
+    },
+    {
+      "path": "index/entry_sources.parquet",
+      "rows": 5,
+      "selection": "entry_pdb_id in example subset",
+      "sha256": "84dbb311da61bc3a0e16108e9823fc12bfa26a9999f8f2e44027858170b6bc3b"
+    },
+    {
+      "path": "index/entry_chains.parquet",
+      "rows": 20,
+      "selection": "entry_pdb_id in example subset",
+      "sha256": "fc7fe9e448cfecaf8807bdd9e137af4967b7823af1ea3f6449039613c0414bec"
+    },
+    {
+      "path": "index/entry_biounit_chains.parquet",
+      "rows": 165,
+      "selection": "entry_pdb_id in example subset",
+      "sha256": "d7ffc0dae81e1a6c80eb12833fa2c2c96de977d7be5267fce724be22b480f117"
+    },
+    {
+      "path": "index/system_validation.parquet",
+      "rows": 99,
+      "selection": "system_id in example subset",
+      "sha256": "3f9cc25f9a0dd47553ddbeab1bc8d3aa9fb8d195588e86179e78c2cd8ba72b70"
+    },
+    {
+      "path": "index/ligand_clusters.parquet",
+      "rows": 101,
+      "selection": "ligand_id in example subset",
+      "sha256": "4365ab7f85d3830430a6ae45e0247f0deb1b5ba6a97e76faea1822b9d4b3fbdd"
+    },
+    {
+      "path": "index/ligand_affinity.parquet",
+      "rows": 101,
+      "selection": "ligand_id in example subset",
+      "sha256": "7a015df9aa0bf746ad86ccb9f6c2963386c47a18e9d1a1f1dc032000399f8201"
+    },
+    {
+      "path": "index/ligand_pocket_membership.parquet",
+      "rows": 101,
+      "selection": "ligand_id in example subset",
+      "sha256": "db171a2c1044137bcac0522553949371254dcd942ac4d84dbade623f3a7f6da7"
+    },
+    {
+      "path": "index/interface_clusters.parquet",
+      "rows": 3,
+      "selection": "system_id in example subset",
+      "sha256": "f45ef6f0af64de21f288f15626a83a6a0857976d9866034bc2e6373111046d69"
+    },
+    {
+      "path": "index/alignment_chain_lookup.parquet",
+      "rows": 20,
+      "selection": "entry_pdb_id in example subset",
+      "sha256": "276656e34a0517adc1ef21903ee1bf77943bb26f95774aad344a445bbac483d1"
+    },
+    {
+      "path": "index/ligand_pocket_residues.parquet",
+      "rows": 1406,
+      "selection": "entry_pdb_id in example subset",
+      "sha256": "0031b1cfabdfc819cf0f049e1bdf6e80dfd5a4399c0bac19c840154201a6a969"
+    },
+    {
+      "path": "protein_clusters/sequence.parquet",
+      "rows": 20,
+      "selection": "example entries",
+      "sha256": "7dead603438cb6cc32ba84d4d328fb53bbfe537ac6033a909728be06d6d46757"
+    },
+    {
+      "path": "protein_clusters/structure.parquet",
+      "rows": 20,
+      "selection": "example entries",
+      "sha256": "c0fd8de996c98913399befedf97e531e9b97b68c0d31c7d4acab60c3704efa62"
+    },
+    {
+      "path": "index/ligand_mmp_pairs.parquet",
+      "rows": 22458,
+      "selection": "either member in example SMILES IDs",
+      "sha256": "1a4148680987539b448a99ad6bd9a7d2a3b7102dc68f5c4043c9001c79118c08"
+    },
+    {
+      "path": "exports/ligand_similarity_scores.parquet",
+      "rows": 1605,
+      "selection": "both endpoints in example subset",
+      "sha256": "5540db09c0095151a34284072825441c03011cb6f21255983f9404c4d9f08627"
+    },
+    {
+      "path": "exports/interface_similarity_scores.parquet",
+      "rows": 2,
+      "selection": "both endpoints in example subset",
+      "sha256": "d0d72cfde80cdccc336bde74af12ff14771fc17cbf311876fed69e4bf1b83e59"
+    },
+    {
+      "path": "exports/interface_half_similarity_scores.parquet",
+      "rows": 12,
+      "selection": "both endpoints in example subset",
+      "sha256": "67a3f879331575509637f04d1d60a86c37103f798582fc1d6960890f8c5738a1"
+    },
+    {
+      "path": "ligand_scores/retained.parquet",
+      "rows": 6,
+      "selection": "both endpoints in example SMILES IDs",
+      "sha256": "f32be5c5047f2786292dd6a1c979093af950ffaa792230b13bb3637d32569661"
+    },
+    {
+      "path": "exports/protein_similarity_scores/examples.parquet",
+      "rows": 524,
+      "selection": "both endpoints in example entries",
+      "sha256": "094690f94cb7411e63d90b17b77d5e0ecce10d63c1c653b414e2b5c40cbdadcd"
+    },
+    {
+      "path": "exports/monomer_similarity_scores/examples.parquet",
+      "rows": 0,
+      "selection": "both endpoints in example entries",
+      "sha256": "fbd2f71db5bc00db097466d824025a6f3cfe06cfd5cb48871823d0990f379cd7"
+    },
+    {
+      "path": "alignment_cigars/search_db=holo/alignment_type=mmseqs/shard=ag.parquet",
+      "rows": 16,
+      "selection": "4agi self alignments",
+      "sha256": "c8f51a30afe4006551c7e9edaa6b0b75ce4da1dde6b8ae34c9bdd918b06675dc"
+    },
+    {
+      "path": "alignment_cigars/search_db=holo/alignment_type=mmseqs/shard=cm.parquet",
+      "rows": 1,
+      "selection": "7cm8 self alignments",
+      "sha256": "2f438a9353d28b015ed4c9f6819711c8217d329bbfa7d855206aab6b215e2849"
+    }
+  ]
+}

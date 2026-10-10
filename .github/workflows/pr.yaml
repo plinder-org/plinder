@@ -96,6 +96,8 @@ jobs:
       - name: Install plinder
         run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --inexact --extra docs
       - name: Build the documentation
+        env:
+          PLINDER_SCORE_EXAMPLE_DATA_DIR: ${{ github.workspace }}/tests/test_data/docs_score_release
         run: sphinx-build --fail-on-warning docs build/docs
       - name: Show notebook errors
         if: failure()
