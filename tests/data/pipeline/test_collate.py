@@ -140,6 +140,7 @@ def _write_entry(
             "chain_modified_residues": [[], []],
             "chain_length": [300, 200],
             "chain_num_unresolved_residues": [0, 0],
+            "chain_unresolved_fraction": [0.0, 0.0],
             "chain_is_holo": [True, True],
             "chain_is_ligand_like": [False, False],
             "chain_uniprot_ids": [["P12345"], ["Q12345"]],
@@ -803,6 +804,8 @@ def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
         "entry_sources": 2,
     }
     assert report["interface_count"] == 2
+    chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
+    assert chains["chain_unresolved_fraction"].tolist() == [0.0] * 4
     annotation = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
     assert [column for column in annotation.columns if column.startswith("entry_")] == [
         "entry_pdb_id"
@@ -1482,6 +1485,17 @@ def test_final_validation_rejects_invalid_chain_sequence_metadata(
     chains.to_parquet(chain_path, index=False)
 
     with pytest.raises(ValueError, match=error_key):
+        run_collation(tmp_path, threads=1, memory_limit="1GB")
+
+
+def test_final_validation_rejects_incorrect_unresolved_fraction(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    chain_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    chains.loc[0, "chain_unresolved_fraction"] = 0.25
+    chains.to_parquet(chain_path, index=False)
+
+    with pytest.raises(ValueError, match="incorrect_unresolved_fraction"):
         run_collation(tmp_path, threads=1, memory_limit="1GB")
 
 
