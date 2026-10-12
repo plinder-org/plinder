@@ -96,6 +96,12 @@ DERIVED_COLUMN_DESCRIPTIONS = {
         "Full polymer sequence in one-letter code, keyed by the source "
         "asymmetric-chain ID"
     ),
+    "chain_unresolved_fraction": (
+        "Fraction of SEQRES residues without coordinates: "
+        "chain_num_unresolved_residues / chain_length (0 to 1); null for missing "
+        "or invalid counts or nonpositive length. Derived from stored counts, "
+        "not an independent coordinate recount"
+    ),
     "chain_sequence_noncanonical": (
         "Full polymer sequence from _entity_poly.pdbx_seq_one_letter_code, with "
         "modified residues as (CCD) tokens"
@@ -548,6 +554,8 @@ def _model_description_lookup() -> dict[str, str]:
         for prefix in [
             "system_pocket",
             "system_ligand",
+            "ligand",
+            "ligand_pocket",
             "ligand_interacting_ligand_chains",
             "ligand_neighboring_ligand_chains",
             "ligand_protein_chains",

@@ -299,6 +299,11 @@ def query_table(
     ``chain_sequence`` to include sequences automatically. When starting from
     ``entry_chains``, choose the cluster table with ``joins=[...]``; both
     cluster tables use the same representative column names.
+
+    Per-ligand ``ligand_validation_*`` and ``ligand_pocket_validation_*``
+    fields are read directly from ``annotation``; no system table is required.
+    If the release lacks those fields, an explicit error is raised rather than
+    substituting system averages or fetching unrelated tables.
     """
     if table_name not in RELEASE_TABLES:
         choices = ", ".join(sorted(RELEASE_TABLES))
@@ -322,6 +327,18 @@ def query_table(
     output_order = _visible_schema_columns(table_name, schemas[table_name])
 
     requested_names = requested_columns | requested_filter_columns
+    if table_name == "annotation":
+        missing_validation = sorted(
+            name
+            for name in requested_names.difference(output_order)
+            if name.startswith(("ligand_validation_", "ligand_pocket_validation_"))
+        )
+        if missing_validation:
+            raise ValueError(
+                "This release's annotation table does not contain the requested "
+                f"per-ligand validation fields: {missing_validation}. Use a release "
+                "with per-ligand validation; system averages are not substituted."
+            )
     unresolved = requested_names.difference(output_order)
     if unresolved:
         candidate_owners: dict[str, list[str]] = {name: [] for name in unresolved}

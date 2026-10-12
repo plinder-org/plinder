@@ -36,6 +36,37 @@ from plinder.data.pipeline.collate import (
 )
 
 
+@pytest.mark.parametrize("unresolved", [0, 75, 300])
+def test_collation_derives_fraction_from_existing_ingest_sidecars(
+    tmp_path: Path, unresolved: int
+) -> None:
+    _write_release(tmp_path)
+    source = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
+    chains = pd.read_parquet(source)
+    assert "chain_unresolved_fraction" not in chains.columns
+    chains.loc[0, "chain_num_unresolved_residues"] = unresolved
+    chains.to_parquet(source, index=False)
+    run_collation(tmp_path, threads=1, memory_limit="1GB")
+    result = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
+    selected = result.loc[
+        (result.entry_pdb_id == "1abc") & (result.chain_asym_id == "A")
+    ]
+    assert selected.chain_unresolved_fraction.tolist() == [unresolved / 300]
+    assert "chain_unresolved_fraction" not in pq.read_schema(source).names
+
+
+def test_cached_shard_without_chain_annotation_is_rebuilt(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    plan_collation(tmp_path)
+    collate_shard(tmp_path, "ab", memory_limit="1GB")
+    path = collate_module._shard_paths(tmp_path, "ab")["entry_chains"]
+    table = pq.read_table(path).drop(["chain_unresolved_fraction"])
+    pq.write_table(table, path)
+
+    collate_shard(tmp_path, "ab", memory_limit="1GB")
+    assert pq.read_table(path)["chain_unresolved_fraction"].to_pylist() == [0.0, 0.0]
+
+
 def test_merge_parquet_shards_combines_small_row_groups(tmp_path: Path) -> None:
     schema = pa.schema([("id", pa.int32()), ("tags", pa.list_(pa.string()))])
     shards = []
@@ -803,6 +834,8 @@ def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
         "entry_sources": 2,
     }
     assert report["interface_count"] == 2
+    chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
+    assert chains["chain_unresolved_fraction"].tolist() == [0.0] * 4
     annotation = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
     assert [column for column in annotation.columns if column.startswith("entry_")] == [
         "entry_pdb_id"

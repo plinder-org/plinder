@@ -10,6 +10,7 @@ chain_sequence_noncanonical	string	Full polymer sequence from _entity_poly.pdbx_
 chain_modified_residues	list<element: string>	Non-canonical SEQRES monomers as {auth_seq}:{comp_id}:{asym}:{label_seq}>{parent} (details), the residue address of ligand_covalent_linkages (comp_id is entity_poly_seq.mon_id); unresolved positions have auth_seq ?; parent and details from _pdbx_struct_mod_residue, else the CCD parent
 chain_length	int64	SEQRES length
 chain_num_unresolved_residues	int64	Number of unresolved residues (SEQRES length - len(residues))
+chain_unresolved_fraction	double	Fraction of SEQRES residues without coordinates: chain_num_unresolved_residues / chain_length (0 to 1); null for missing or invalid counts or nonpositive length. Derived from stored counts, not an independent coordinate recount
 chain_is_holo	bool	Whether the chain participates in a holo receptor or is excluded from the apo partition
 chain_is_ligand_like	bool	Whether this chain is ligand-like rather than an eligible receptor chain
 chain_uniprot_ids	list<element: string>	UniProt accessions mapped to the chain
