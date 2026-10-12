@@ -2455,16 +2455,6 @@ class Ligand(DocBaseModel):
         # spans several — so the source-reconstruction SDF covers the whole
         # molecule, not just the primary chain.
         data["ligand_instance_chains"] = sorted(self._members)
-        from plinder.data.annotations.ligand_validation import (
-            format_selection_validation,
-        )
-
-        data.update(format_selection_validation(self._members, chains, prefix="ligand"))
-        data.update(
-            format_selection_validation(
-                self.neighboring_residues, chains, prefix="ligand_pocket"
-            )
-        )
         data["ligand_water_residues"] = sorted(
             f"{chain_id}_{residue_number}"
             for chain_id, residue_numbers in self.waters.items()

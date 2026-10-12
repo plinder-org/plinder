@@ -93,7 +93,7 @@ class ResidueValidation(DocBaseModel):
             residue_with_alts = Residue.CreateFromMmCIFPosition(
                 chain, resnum, str(entity), doc
             )
-        except (ResidueNotFound, ModelledSubgroupNotFound, AssertionError) as e:
+        except (ResidueNotFound, ModelledSubgroupNotFound) as e:
             LOG.warning(
                 f"from_residue: Error creating residue {chain} {resnum} {entity}: {e}"
             )

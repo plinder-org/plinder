@@ -145,17 +145,10 @@ chain, validation, cluster, and representative data so clients only load it
 when needed. `query_table()` can request columns across related tables in a
 single query and selects the required relationships from those columns.
 
-- `annotation`: ligand annotations and reconstructable system IDs, including
-  `ligand_validation_*` for that ligand's own residues (all members of a
-  multi-chain covalent ligand) and `ligand_pocket_validation_*` for its own
-  neighboring receptor residues. These do not mix in other ligands, ions, or
-  additives from the system. Unavailable validation is null;
+- `annotation`: ligand annotations and reconstructable system IDs;
 - `system_validation`: ligand and pocket validation summaries for each
   system;
-- `entry_chains`: one polymer chain in a PDB entry, including
-  `chain_unresolved_fraction` (unresolved residues / SEQRES length, from 0 to 1).
-  This is derived from stored counts, not an independent coordinate recount;
-  missing or invalid counts give null. No completeness cutoff is imposed;
+- `entry_chains`: one polymer chain in a PDB entry;
 - `entry_biounit_chains`: one chain instance in a biological assembly;
 - `entry_metadata`: experimental and entry-validation metadata;
 - `entry_sources`: the source mmCIF revision used for the release;
@@ -180,33 +173,6 @@ single query and selects the required relationships from those columns.
 - `interface_representatives`: representative full interfaces;
 - `interface_half_representatives`: representative interface sides;
 - `interface_clusters`: protein-interface cover labels.
-
-Per-ligand validation is available directly through `query_table()` without
-loading or joining system summaries:
-
-```python
-from plinder.core import query_table
-
-ligands = query_table(
-    "annotation",
-    columns=[
-        "ligand_id",
-        "ligand_validation_average_rscc",
-        "ligand_validation_average_rsr",
-        "ligand_pocket_validation_average_rscc",
-    ],
-    filters=[("ligand_validation_average_rscc", ">=", 0.8)],
-)
-```
-
-These values describe the ligand's own residues and its own neighboring
-receptor residues, not the other ligand chains in its system. Check
-`ligand_validation_percent_processed_residues` for partial report coverage;
-unavailable or ambiguous residue validation remains missing. A release whose
-annotation table lacks these fields raises an explicit error; the API never
-substitutes system averages. System summaries remain available separately,
-when explicitly requested as `system_ligand_validation_*` or
-`system_pocket_validation_*` columns.
 
 The checked-in column reference below is generated from these release tables.
 

@@ -21,7 +21,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from plinder.core.utils.files import write_json_atomic
-from plinder.data.annotations.chain_metadata import annotate_chain_metadata
 from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     min_interface_residues_from_schema,
@@ -200,7 +199,6 @@ ENTRY_CHAIN_SCHEMA = pa.schema(
         ("chain_modified_residues", pa.list_(pa.string())),
         ("chain_length", pa.int64()),
         ("chain_num_unresolved_residues", pa.int64()),
-        ("chain_unresolved_fraction", pa.float64()),
         ("chain_is_holo", pa.bool_()),
         ("chain_is_ligand_like", pa.bool_()),
         ("chain_uniprot_ids", pa.list_(pa.string())),
@@ -1017,12 +1015,6 @@ def _normalize_arrow_table(
     *,
     optional_columns: set[str] | frozenset[str] = frozenset(),
 ) -> pa.Table:
-    if schema.equals(ENTRY_CHAIN_SCHEMA) and {
-        "chain_length",
-        "chain_num_unresolved_residues",
-    }.issubset(table.column_names):
-        # Derive this even for old ingest sidecars, so no structure rerun is needed.
-        table = annotate_chain_metadata(table)
     if table.num_rows:
         missing = sorted(
             set(schema.names).difference(table.column_names, optional_columns)
@@ -1169,12 +1161,7 @@ def _completed_shard(
         == include_ligand_annotations
         and all(path.is_file() for path in outputs)
     ):
-        try:
-            schema = pq.read_schema(paths["entry_chains"])
-        except (OSError, pa.ArrowInvalid):
-            return None
-        if schema.equals(ENTRY_CHAIN_SCHEMA):
-            return metrics
+        return metrics
     return None
 
 
@@ -1513,17 +1500,6 @@ def _validate_final_tables(
                 )
             ),
         }
-        invalid_chain_metadata["incorrect_unresolved_fraction"] = int(
-            _fetch_scalar(
-                connection,
-                "SELECT count(*) FROM entry_chains WHERE "
-                "chain_unresolved_fraction IS DISTINCT FROM "
-                "CASE WHEN chain_length > 0 AND "
-                "chain_num_unresolved_residues BETWEEN 0 AND chain_length "
-                "THEN chain_num_unresolved_residues::DOUBLE / chain_length "
-                "ELSE NULL END",
-            )
-        )
         if any(invalid_chain_metadata.values()):
             raise ValueError(
                 f"invalid entry-chain sequence metadata: {invalid_chain_metadata}"
