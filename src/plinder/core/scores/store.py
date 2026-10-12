@@ -73,6 +73,21 @@ def _files(root: Path, relatives: list[str], release: PlinderRelease) -> list[Pa
     return paths
 
 
+def _to_pandas(table: pa.Table, partition_dictionaries: dict[str, str]) -> pd.DataFrame:
+    """Preserve source Hive categories, including those absent from the rows."""
+    result = table.to_pandas()
+    for name, encoded in partition_dictionaries.items():
+        if name not in result:
+            continue
+        dictionary = pa.ipc.open_stream(base64.b64decode(encoded)).read_all()
+        result[name] = pd.Categorical(
+            result[name],
+            categories=dictionary.column(0).to_pandas().rename(None),
+            ordered=table.schema.field(name).type.ordered,
+        )
+    return result
+
+
 def read_partitioned_scores(
     release: PlinderRelease,
     artifact: str,
@@ -89,10 +104,13 @@ def read_partitioned_scores(
     if manifest.get("version") != 1 or manifest.get("artifact") != artifact:
         raise ValueError(f"unsupported score-store manifest: {manifest_path}")
     schema = pa.ipc.read_schema(pa.BufferReader(base64.b64decode(manifest["schema"])))
+    partition_dictionaries = manifest.get("partition_dictionaries", {})
     # Bind filters/columns against the schema even if no shard matches.
     expression = pq.filters_to_expression(filters)
     empty = ds.dataset(pa.Table.from_batches([], schema=schema))
-    empty_result = empty.to_table(columns=columns, filter=expression).to_pandas()
+    empty_result = _to_pandas(
+        empty.to_table(columns=columns, filter=expression), partition_dictionaries
+    )
     query_keys, target_keys = SCORE_KEYS[artifact]
     numeric = artifact == "ligand_scores"
     data: dict[str, list[str]] = manifest["data"]
@@ -138,8 +156,9 @@ def read_partitioned_scores(
     paths = _files(manifest_path.parent, relatives, release)
     if not paths:
         return empty_result
-    return (
-        ds.dataset(paths, format="parquet", schema=schema)
-        .to_table(columns=columns, filter=expression)
-        .to_pandas()
+    return _to_pandas(
+        ds.dataset(paths, format="parquet", schema=schema).to_table(
+            columns=columns, filter=expression
+        ),
+        partition_dictionaries,
     )

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from plinder.core.release import PlinderRelease
@@ -180,7 +181,24 @@ def export_score_store(
         raise ValueError("score-store input and output must be separate")
     if threads < 1:
         raise ValueError("threads must be positive")
-    schema = pq.ParquetDataset(input_path).schema
+    dataset = pq.ParquetDataset(input_path)
+    schema = dataset.schema
+    # Arrow schemas record dictionary types, not their values. Keep the Hive
+    # categories even when a routed query selects no rows (or no shards).
+    partition_dictionaries = {}
+    if dataset.partitioning is not None:
+        for field, dictionary in zip(
+            dataset.partitioning.schema, dataset.partitioning.dictionaries
+        ):
+            if dictionary is None or not pa.types.is_dictionary(field.type):
+                continue
+            table = pa.table({field.name: dictionary})
+            sink = pa.BufferOutputStream()
+            with pa.ipc.new_stream(sink, table.schema) as writer:
+                writer.write_table(table)
+            partition_dictionaries[field.name] = base64.b64encode(
+                sink.getvalue().to_pybytes()
+            ).decode()
     columns = ", ".join(_identifier(name) for name in schema.names)
     numeric = artifact == "ligand_scores"
     inputs = (
@@ -273,6 +291,7 @@ def export_score_store(
             "version": 1,
             "artifact": artifact,
             "schema": base64.b64encode(schema.serialize().to_pybytes()).decode(),
+            "partition_dictionaries": partition_dictionaries,
             "rows": count,
             "fingerprint": {
                 "hash_sum": str(fingerprint_sum),

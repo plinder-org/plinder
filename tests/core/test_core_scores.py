@@ -5,6 +5,7 @@ import pytest
 
 from plinder.core import PlinderRelease, query_table, scores
 from plinder.core.scores import ligand as ligand_module
+from plinder.core.scores.query import query_score_table
 from plinder.data.pipeline.score_store import export_score_store
 
 
@@ -71,6 +72,38 @@ def test_public_queries_use_partitioned_exports(
         expected.sort_values(columns).reset_index(drop=True),
         actual.sort_values(columns).reset_index(drop=True),
     )
+
+
+@pytest.mark.parametrize("columns", [None, ["alignment_type"]])
+@pytest.mark.parametrize(
+    "filters",
+    [
+        [("query_entry", "==", "1abc")],
+        [("target_entry", "==", "1abc")],
+        [("query_entry", "==", "missing")],
+    ],
+)
+def test_partitioned_scores_preserve_hive_categories(
+    similarity_release, tmp_path, columns, filters
+):
+    output = tmp_path / "optimized"
+    artifact = "protein_similarity_scores"
+    source = similarity_release.fetch(artifact)
+    extra = pd.read_parquet(source).drop(columns="alignment_type")
+    extra["query_entry"] = "2def"
+    extra["target_entry"] = "3ghi"
+    extra["source"] = "mmseqs"
+    partition = source / "alignment_type=mmseqs"
+    partition.mkdir()
+    extra.to_parquet(partition / "part-0.parquet", index=False)
+    export_score_store(similarity_release.data_dir, output, artifact)
+    expected = query_score_table(
+        artifact, release=similarity_release, columns=columns, filters=filters
+    )
+    actual = query_score_table(
+        artifact, release=PlinderRelease(output), columns=columns, filters=filters
+    )
+    pd.testing.assert_frame_equal(expected, actual)
 
 
 @pytest.fixture
