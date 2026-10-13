@@ -55,6 +55,7 @@ def test_unresolved_atoms_require_a_reference(
             "getRSRZ.return_value": 0.2,
             "getRSCC.return_value": 0.9,
             "getOccupancies.return_value": [1.0],
+            "pdbx_residue": pd.DataFrame({"type_symbol": ["C"]}),
             "getBFactors.return_value": [20.0],
             "getResName.return_value": "LIG",
             "countAtomsPDBX.return_value": 5,
