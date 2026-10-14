@@ -54,9 +54,17 @@ def test_unresolved_atoms_require_a_reference(
             "getRSR.return_value": 0.1,
             "getRSRZ.return_value": 0.2,
             "getRSCC.return_value": 0.9,
-            "getOccupancies.return_value": [1.0],
-            "pdbx_residue": pd.DataFrame({"type_symbol": ["C"]}),
-            "getBFactors.return_value": [20.0],
+            "getOccupancies.return_value": [1.0] * 5,
+            "pdbx_residue": pd.DataFrame({"type_symbol": ["C"] * 5}),
+            "getBFactors.return_value": [20.0] * 5,
+            "conop": (
+                SimpleNamespace(
+                    atom_specs=[SimpleNamespace(element="C")] * reference_count
+                )
+                if reference_count is not None
+                else None
+            ),
+            "ost": SimpleNamespace(atoms=[SimpleNamespace(element="C")] * 5),
             "getResName.return_value": "LIG",
             "countAtomsPDBX.return_value": 5,
             "countUnknownAtoms.return_value": 0,
@@ -83,6 +91,94 @@ def test_unresolved_atoms_require_a_reference(
         residue.isAtomCountConsistent.assert_not_called()
     else:
         residue.isAtomCountConsistent.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    ("isotope", "reference_isotope", "ost_isotope"),
+    [
+        ("H", "H", "H"),
+        ("D", "H", "H"),
+        ("D", "D", "D"),
+        ("T", "H", "T"),
+        ("T", "T", "T"),
+        ("D", "D", "H"),
+        ("H", "D", "H"),
+    ],
+)
+@pytest.mark.parametrize("reference_heavy_atoms", [2, 3])
+def test_hydrogen_isotopes_do_not_change_validation_counts_or_averages(
+    monkeypatch, isotope, reference_isotope, ost_isotope, reference_heavy_atoms
+):
+    from PDBValidation.Residue import Ligand
+
+    # Use the dependency's real counter and consistency methods: they count
+    # D/T as heavy atoms unless PLINDER normalizes the counting view.
+    residue = Ligand.__new__(Ligand)
+    residue.pdbx_residue = pd.DataFrame(
+        {
+            "type_symbol": ["C", "O", isotope],
+            "occupancy": [1.0, 0.8, 0.0],
+            "B_iso_or_equiv": [10.0, 30.0, 999.0],
+        }
+    )
+    residue.ost = SimpleNamespace(
+        atoms=[SimpleNamespace(element=e) for e in ["C", "O", ost_isotope]]
+    )
+    residue.conop = SimpleNamespace(
+        atom_specs=[
+            SimpleNamespace(element=e)
+            for e in ["C", "O"]
+            + (["N"] if reference_heavy_atoms == 3 else [])
+            + [reference_isotope]
+        ]
+    )
+    residue.modelled_subgroup = {
+        "rsr": "0.1",
+        "rsrz": "0.2",
+        "rscc": "0.9",
+        "ligand_clashes_outlier": "yes",
+    }
+    residue.getAltCode = lambda: "."
+    residue.getInsertionCode = lambda: "."
+    residue.getResName = lambda: "LIG"
+    residue.hasClashingPartialOccupancyAtoms = lambda: False
+    original_counts = (
+        residue.countAtomsHeavyPDBX(),
+        residue.countAtomsHeavyConop(),
+        residue.countAtomsHeavyOST(),
+        residue.isAtomCountConsistent(),
+    )
+    monkeypatch.setattr(
+        "PDBValidation.Residue.Residue.CreateFromMmCIFPosition",
+        lambda *_args: SimpleNamespace(
+            listAlt=lambda: {"."}, getAlt=lambda _alt: residue
+        ),
+    )
+
+    validation = ResidueValidation.from_residue("A", 1, "1", object())
+
+    assert validation is not None
+    assert validation.atom_count == 3  # Total atoms still includes hydrogen isotopes.
+    assert validation.heavy_atom_count == 2
+    assert validation.num_unresolved_heavy_atoms == reference_heavy_atoms - 2
+    assert validation.is_atom_count_consistent is (reference_heavy_atoms == 2)
+    assert validation.average_occupancy == pytest.approx(0.9)
+    assert validation.average_b_factor == 20.0
+    assert (validation.rsr, validation.rsrz, validation.rscc) == (0.1, 0.2, 0.9)
+    assert validation.is_outlier["clashes"] is True
+    assert (
+        residue.countAtomsHeavyPDBX(),
+        residue.countAtomsHeavyConop(),
+        residue.countAtomsHeavyOST(),
+        residue.isAtomCountConsistent(),
+    ) == original_counts  # Do not mutate the dependency's residue or library.
+    summary = ResidueListValidation.from_residues(
+        [validation], ResidueValidationThresholds(min_average_occupancy=0.8)
+    )
+    assert summary is not None
+    assert summary.heavy_atom_count == 2
+    assert summary.num_unresolved_heavy_atoms == reference_heavy_atoms - 2
+    assert summary.percent_occupancy_over_threshold == 100.0
 
 
 def _validation(unresolved: int | None) -> ResidueValidation:

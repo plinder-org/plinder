@@ -465,8 +465,23 @@ def test_collation_keeps_unknown_ligand_interest_boolean(tmp_path):
     assert flag.null_count == table.num_rows == 2
 
 
-def test_weekly_removal_only_needs_no_raw_entries(entry_update_case, tmp_path):
+@pytest.mark.parametrize("fraction_column", ["present", "absent", "null"])
+def test_weekly_removal_only_needs_no_raw_entries(
+    entry_update_case, tmp_path, fraction_column
+):
     base, args, calls = entry_update_case
+    chain_path = base / "index/entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    chains.loc[chains.chain_asym_id.eq("A"), "chain_num_unresolved_residues"] = 30
+    chains["chain_unresolved_fraction"] = (
+        chains.chain_num_unresolved_residues / chains.chain_length
+    )
+    if fraction_column == "absent":
+        chains = chains.drop(columns="chain_unresolved_fraction")
+    elif fraction_column == "null":
+        chains["chain_unresolved_fraction"] = None
+    chains.to_parquet(chain_path, index=False)
+    before = _index_bytes(base)
     original_plan = json.loads((args["plan_dir"] / "plan.json").read_text())
     plan_dir = tmp_path / "removal-plan"
     updates.plan_update(
@@ -484,6 +499,7 @@ def test_weekly_removal_only_needs_no_raw_entries(entry_update_case, tmp_path):
     report = update_entries.apply_entry_update(**args)
     assert report["ingested_pdb_ids"] == []
     assert calls == []
+    assert _index_bytes(base) == before
     for filename, _ in update_entries.ENTRY_TABLES.values():
         frame = pd.read_parquet(args["output_dir"] / "index" / filename)
         ids = (
@@ -492,6 +508,56 @@ def test_weekly_removal_only_needs_no_raw_entries(entry_update_case, tmp_path):
             else frame.system_id.str.split("__").str[0]
         )
         assert set(ids) == {"1abc", "3ghi"}
+    updated_chains = pd.read_parquet(args["output_dir"] / "index/entry_chains.parquet")
+    assert updated_chains["chain_unresolved_fraction"].tolist() == [0.1, 0.0] * 2
+
+
+@pytest.mark.parametrize("fraction_column", ["absent", "null"])
+def test_weekly_update_derives_missing_retained_chain_fraction(
+    entry_update_case, fraction_column
+):
+    base, args, _ = entry_update_case
+    path = base / "index/entry_chains.parquet"
+    chains = pd.read_parquet(path)
+    retained = chains.entry_pdb_id.eq("3ghi") & chains.chain_asym_id.eq("A")
+    chains.loc[retained, "chain_num_unresolved_residues"] = 60
+    if fraction_column == "absent":
+        chains = chains.drop(columns="chain_unresolved_fraction")
+    else:
+        chains.loc[retained, "chain_unresolved_fraction"] = None
+    chains.to_parquet(path, index=False)
+    before = _index_bytes(base)
+
+    report = update_entries.apply_entry_update(**args)
+
+    assert report["status"] == "requires_downstream_repair"
+    assert _index_bytes(base) == before
+    updated = pd.read_parquet(args["output_dir"] / "index/entry_chains.parquet")
+    row = updated.loc[
+        updated.entry_pdb_id.eq("3ghi") & updated.chain_asym_id.eq("A")
+    ].iloc[0]
+    assert row.chain_unresolved_fraction == 0.2
+    incoming = updated.loc[updated.entry_pdb_id.isin(["1abc", "4jkl"])]
+    assert incoming.chain_unresolved_fraction.tolist() == [0.0] * len(incoming)
+
+
+@pytest.mark.parametrize("supplied_fraction", [0.25, -0.1, 1.1])
+def test_weekly_update_rejects_incorrect_retained_chain_fraction(
+    entry_update_case, supplied_fraction
+):
+    base, args, _ = entry_update_case
+    path = base / "index/entry_chains.parquet"
+    chains = pd.read_parquet(path)
+    retained = chains.entry_pdb_id.eq("3ghi") & chains.chain_asym_id.eq("A")
+    chains.loc[retained, "chain_unresolved_fraction"] = supplied_fraction
+    chains.to_parquet(path, index=False)
+    before = _index_bytes(base)
+
+    with pytest.raises(ValueError, match="incorrect_unresolved_fraction"):
+        update_entries.apply_entry_update(**args)
+
+    assert _index_bytes(base) == before
+    assert not (args["output_dir"] / "index/collation.json").exists()
 
 
 def test_weekly_update_failure_and_resume_preserve_base(entry_update_case, monkeypatch):
