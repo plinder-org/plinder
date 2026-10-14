@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typing as ty
 from collections.abc import Collection, Sequence
+from copy import copy
 from functools import cached_property
 
 import numpy as np
@@ -13,6 +14,7 @@ from plinder.core.utils.log import setup_logger
 from plinder.data.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
+HYDROGEN_ELEMENTS = frozenset({"H", "D", "T"})
 
 if ty.TYPE_CHECKING:
     from PDBValidation.Validation import PDBValidation
@@ -29,6 +31,24 @@ def nanmean_return_nan(arr: list[float]) -> float:
     if len(arr) == 0 or all(np.isnan(arr)):
         return float(np.nan)
     return float(np.nanmean(arr))
+
+
+def _heavy_atom_count_is_consistent(
+    residue: ty.Any, observed_count: int, reference_count: int
+) -> bool:
+    """Keep dependency consistency rules, with isotope-aware heavy counts.
+
+    Normalize only a shallow counting view, never the original residue or
+    the shared compound library. The subclass's polymer/leaving-atom rules
+    remain responsible for deciding consistency.
+    """
+    counting_view = copy(residue)
+    counting_view.countAtomsHeavyPDBX = lambda: observed_count
+    counting_view.countAtomsHeavyConop = lambda: reference_count
+    counting_view.countAtomsHeavyOST = lambda: sum(
+        str(atom.element).upper() not in HYDROGEN_ELEMENTS for atom in residue.ost.atoms
+    )
+    return bool(counting_view.isAtomCountConsistent())
 
 
 def _select_altcode(
@@ -93,7 +113,7 @@ class ResidueValidation(DocBaseModel):
             residue_with_alts = Residue.CreateFromMmCIFPosition(
                 chain, resnum, str(entity), doc
             )
-        except (ResidueNotFound, ModelledSubgroupNotFound) as e:
+        except (ResidueNotFound, ModelledSubgroupNotFound, AssertionError) as e:
             LOG.warning(
                 f"from_residue: Error creating residue {chain} {resnum} {entity}: {e}"
             )
@@ -103,8 +123,22 @@ class ResidueValidation(DocBaseModel):
         try:
             alt = _select_altcode(alts, preferred_altcode)
             residue = residue_with_alts.getAlt(alt)
-            heavy_atom_count = residue.countAtomsHeavyPDBX()
-            heavy_atom_count_conop = residue.countAtomsHeavyConop()
+            heavy = (
+                ~residue.pdbx_residue["type_symbol"]
+                .astype(str)
+                .str.upper()
+                .isin(HYDROGEN_ELEMENTS)
+                .to_numpy()
+            )
+            heavy_atom_count = int(heavy.sum())
+            heavy_atom_count_conop = (
+                sum(
+                    str(atom.element).upper() not in HYDROGEN_ELEMENTS
+                    for atom in residue.conop.atom_specs
+                )
+                if residue.conop is not None
+                else None
+            )
             num_unresolved_heavy_atoms = None
             if heavy_atom_count_conop is not None:
                 difference = heavy_atom_count_conop - heavy_atom_count
@@ -120,8 +154,12 @@ class ResidueValidation(DocBaseModel):
                 rsr=residue.getRSR(),
                 rsrz=residue.getRSRZ(),
                 rscc=residue.getRSCC(),
-                average_occupancy=np.nanmean(residue.getOccupancies()),
-                average_b_factor=np.nanmean(residue.getBFactors()),
+                average_occupancy=nanmean_return_nan(
+                    np.asarray(residue.getOccupancies())[heavy].tolist()
+                ),
+                average_b_factor=nanmean_return_nan(
+                    np.asarray(residue.getBFactors())[heavy].tolist()
+                ),
                 unknown_residue=residue.getResName() in PDBValidation.unknown_resnames,
                 atom_count=residue.countAtomsPDBX(),
                 heavy_atom_count=heavy_atom_count,
@@ -132,7 +170,9 @@ class ResidueValidation(DocBaseModel):
                     for s in ["geometry", "density", "chirality", "clashes"]
                 },
                 is_atom_count_consistent=(
-                    residue.isAtomCountConsistent()
+                    _heavy_atom_count_is_consistent(
+                        residue, heavy_atom_count, heavy_atom_count_conop
+                    )
                     if heavy_atom_count_conop is not None
                     else None
                 ),

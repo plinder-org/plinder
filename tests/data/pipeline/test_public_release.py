@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,52 @@ def test_public_release_replacement_drops_old_files(tmp_path: Path) -> None:
     assert (public / "search_databases/holo_foldseek/db").stat().st_ino != (
         working / "search_databases/holo_foldseek/db"
     ).stat().st_ino
+
+
+def test_public_release_includes_only_completed_score_store_files(
+    tmp_path: Path,
+) -> None:
+    working = tmp_path / "working"
+    _working_release(working)
+    root = working / "score_store/interface_similarity_scores"
+    root.mkdir(parents=True)
+    (root / "data.parquet").write_bytes(b"scores")
+    (root / "target.parquet").write_bytes(b"index")
+    (root / "unlisted.parquet").write_bytes(b"private work")
+    (root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "artifact": "interface_similarity_scores",
+                "data": {"ab": ["data.parquet"]},
+                "targets": {"de": ["target.parquet"]},
+            }
+        )
+    )
+    public = tmp_path / "public"
+    prepare_public_release(working, public)
+    assert (public / root.relative_to(working) / "manifest.json").is_file()
+    assert (public / root.relative_to(working) / "data.parquet").is_file()
+    assert not (public / root.relative_to(working) / "unlisted.parquet").exists()
+
+
+def test_public_release_rejects_score_store_traversal(tmp_path: Path) -> None:
+    working = tmp_path / "working"
+    _working_release(working)
+    root = working / "score_store/interface_similarity_scores"
+    root.mkdir(parents=True)
+    (root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "artifact": "interface_similarity_scores",
+                "data": {"ab": ["../../private.parquet"]},
+                "targets": {},
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="unsafe"):
+        prepare_public_release(working, tmp_path / "public")
 
 
 def test_missing_public_file_does_not_replace_release(tmp_path: Path) -> None:

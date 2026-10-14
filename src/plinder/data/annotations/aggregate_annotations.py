@@ -2798,6 +2798,7 @@ class Entry(DocBaseModel):
             "chain_modified_residues",
             "chain_length",
             "chain_num_unresolved_residues",
+            "chain_unresolved_fraction",
             "chain_is_holo",
             "chain_is_ligand_like",
             "chain_uniprot_ids",
@@ -2825,6 +2826,12 @@ class Entry(DocBaseModel):
                     "chain_modified_residues": list(chain.modified_residues),
                     "chain_length": chain.length,
                     "chain_num_unresolved_residues": chain.num_unresolved_residues,
+                    "chain_unresolved_fraction": (
+                        chain.num_unresolved_residues / chain.length
+                        if chain.length > 0
+                        and 0 <= chain.num_unresolved_residues <= chain.length
+                        else None
+                    ),
                     "chain_is_holo": chain.holo,
                     "chain_is_ligand_like": chain_id in self.ligand_like_chains,
                     "chain_uniprot_ids": sorted(chain.mappings.get("UniProt", {})),
@@ -3029,7 +3036,11 @@ class Entry(DocBaseModel):
                 instance_chain.split(".", maxsplit=1)[-1]
                 for instance_chain in system.protein_chains_asym_id
             }
-            | {ligand.asym_id for ligand in system.ligands}
+            | {
+                member.split(".", maxsplit=1)[-1]
+                for ligand in system.ligands
+                for member in ligand._members
+            }
             for system_id, system in self.systems.items()
         }
         failed_chains = set()

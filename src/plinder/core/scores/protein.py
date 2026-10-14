@@ -14,7 +14,7 @@ from plinder.core.scores.mapping import (
     decode_cigar_residue_positions,
     unpack_residue_identities,
 )
-from plinder.core.scores.query import Filters, read_score_table
+from plinder.core.scores.query import Filters, query_score_table
 from plinder.core.utils.dec import timeit
 
 OVERLAP_COLUMNS = [
@@ -47,11 +47,16 @@ def query_protein_similarity(
     ligand pockets and protein interfaces.
     """
     selected_release = release or PlinderRelease()
-    paths = [selected_release.fetch("protein_similarity_scores")]
+    artifacts = ["protein_similarity_scores"]
     if include_monomers:
-        paths.append(selected_release.fetch("monomer_similarity_scores"))
+        artifacts.append("monomer_similarity_scores")
     return pd.concat(
-        [read_score_table(path, columns=columns, filters=filters) for path in paths],
+        [
+            query_score_table(
+                artifact, release=selected_release, columns=columns, filters=filters
+            )
+            for artifact in artifacts
+        ],
         ignore_index=True,
     )
 

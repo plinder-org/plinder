@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
 from plinder.core.release import RELEASE_PATHS, RELEASE_TABLES
+from plinder.core.scores.store import SCORE_KEYS
 
 _FILE_ARTIFACTS = (
     *(table["artifact"] for table in RELEASE_TABLES.values()),
@@ -38,6 +40,32 @@ _OPTIONAL = {"monomer_similarity_scores", "monomer_mmseqs", "monomer_foldseek"}
 
 def _public_files(source: Path) -> list[Path]:
     files = {Path(RELEASE_PATHS[name]) for name in _FILE_ARTIFACTS}
+    # Optional until a release has been repackaged. Publish only manifest-listed
+    # files, never scratch files or an unfinished export staging directory.
+    for artifact in SCORE_KEYS:
+        root = Path("score_store") / artifact
+        manifest = source / root / "manifest.json"
+        if not manifest.is_file():
+            continue
+        payload = json.loads(manifest.read_text())
+        if payload.get("version") != 1 or payload.get("artifact") != artifact:
+            raise ValueError(f"invalid score-store manifest: {manifest}")
+        files.add(root / "manifest.json")
+        for group in ("data", "targets"):
+            for paths in payload[group].values():
+                for relative in paths:
+                    path = Path(relative)
+                    if (
+                        path.is_absolute()
+                        or "\\" in relative
+                        or any(part in {"", ".", ".."} for part in relative.split("/"))
+                        or path.suffix != ".parquet"
+                    ):
+                        raise ValueError(f"unsafe score-store path: {relative!r}")
+                    (source / root / path).resolve().relative_to(
+                        (source / root).resolve()
+                    )
+                    files.add(root / path)
     for name in _PARQUET_DIRECTORIES:
         directory = source / RELEASE_PATHS.get(name, name)
         if not directory.is_dir():

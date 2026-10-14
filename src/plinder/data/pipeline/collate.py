@@ -199,6 +199,7 @@ ENTRY_CHAIN_SCHEMA = pa.schema(
         ("chain_modified_residues", pa.list_(pa.string())),
         ("chain_length", pa.int64()),
         ("chain_num_unresolved_residues", pa.int64()),
+        ("chain_unresolved_fraction", pa.float64()),
         ("chain_is_holo", pa.bool_()),
         ("chain_is_ligand_like", pa.bool_()),
         ("chain_uniprot_ids", pa.list_(pa.string())),
@@ -1500,6 +1501,17 @@ def _validate_final_tables(
                 )
             ),
         }
+        invalid_chain_metadata["incorrect_unresolved_fraction"] = int(
+            _fetch_scalar(
+                connection,
+                "SELECT count(*) FROM entry_chains WHERE "
+                "chain_unresolved_fraction IS DISTINCT FROM "
+                "CASE WHEN chain_length > 0 AND "
+                "chain_num_unresolved_residues BETWEEN 0 AND chain_length "
+                "THEN chain_num_unresolved_residues::DOUBLE / chain_length "
+                "ELSE NULL END",
+            )
+        )
         if any(invalid_chain_metadata.values()):
             raise ValueError(
                 f"invalid entry-chain sequence metadata: {invalid_chain_metadata}"

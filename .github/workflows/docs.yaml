@@ -43,6 +43,8 @@ jobs:
       - name: Build docs
         shell: bash -el {0}
         id: build
+        env:
+          PLINDER_SCORE_EXAMPLE_DATA_DIR: ${{ github.workspace }}/tests/test_data/docs_score_release
         run: sphinx-build docs build/docs
       - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3

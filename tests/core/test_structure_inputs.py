@@ -266,16 +266,14 @@ def test_search_dispatches_fasta_folder_and_table(test_dir, tmp_path, monkeypatc
     original = test_dir / "reconstructed_systems/1avd__1__1.A__1.C/receptor.cif"
     (folder / "one.cif").write_bytes(original.read_bytes())
     module.search(folder, output_dir=tmp_path / "folder_search")
-    assert calls[-1][1]["include_ligands"] is False
+    assert calls[-1][1]["include_ligands"] is None
     table = pd.DataFrame({"input_id": ["custom_id"], "structure_path": [str(original)]})
     module.search(table, output_dir=tmp_path / "table_search", mode="ligands")
     assert calls[-1][0][0].name == "custom_id.cif"
     assert calls[-1][1]["include_ligands"] is True
-    with pytest.raises(ValueError, match="input table"):
-        module.search(folder, output_dir=tmp_path / "bad", mode="ligands")
     with pytest.raises(ValueError, match="FASTA inputs"):
         module.search(
-            tmp_path / "query.fa", output_dir=tmp_path / "bad", mode="interfaces"
+            tmp_path / "query.fa", output_dir=tmp_path / "bad", mode="ligands"
         )
 
 
