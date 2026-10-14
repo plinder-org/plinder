@@ -105,6 +105,7 @@ class ResidueValidation(DocBaseModel):
             residue = residue_with_alts.getAlt(alt)
             heavy_atom_count = residue.countAtomsHeavyPDBX()
             heavy_atom_count_conop = residue.countAtomsHeavyConop()
+            heavy = ~residue.pdbx_residue["type_symbol"].isin(["H", "D"]).to_numpy()
             num_unresolved_heavy_atoms = None
             if heavy_atom_count_conop is not None:
                 difference = heavy_atom_count_conop - heavy_atom_count
@@ -120,8 +121,8 @@ class ResidueValidation(DocBaseModel):
                 rsr=residue.getRSR(),
                 rsrz=residue.getRSRZ(),
                 rscc=residue.getRSCC(),
-                average_occupancy=np.nanmean(residue.getOccupancies()),
-                average_b_factor=np.nanmean(residue.getBFactors()),
+                average_occupancy=np.nanmean(np.asarray(residue.getOccupancies())[heavy]),
+                average_b_factor=np.nanmean(np.asarray(residue.getBFactors())[heavy]),
                 unknown_residue=residue.getResName() in PDBValidation.unknown_resnames,
                 atom_count=residue.countAtomsPDBX(),
                 heavy_atom_count=heavy_atom_count,
