@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import gzip
 from pathlib import Path
 
 import pandas as pd
@@ -212,7 +213,12 @@ def test_source_mmcif_reports_missing_versioned_entry(
 
     with pytest.raises(FileNotFoundError, match="revision 1.0"):
         core_io.get_pdb_mmcif("9zzz", manifest_path=source_manifest)
-    assert len(calls) == 1
+    assert calls == [
+        "https://files-versioned.wwpdb.org/pdb_versioned/data/entries/"
+        "zz/pdb_00009zzz/pdb_00009zzz_xyz_v1-0.cif.gz",
+        "https://files-versioned.wwpdb.org/pdb_versioned/views/all/coordinates/mmcif/"
+        "zz/pdb_00009zzz/pdb_00009zzz_xyz_v1.cif.gz",
+    ]
     assert not core_io.pdb_mmcif_cache_path(
         "9zzz",
         manifest_path=source_manifest,
@@ -410,6 +416,112 @@ def test_source_mmcif_rejects_wrong_version(release_cache, cif_2y4i, monkeypatch
         "2y4i",
         revision=(2, 0),
     ).exists()
+
+
+def _revision_mmcif(major: int, minor: int) -> bytes:
+    return gzip.compress(
+        (
+            "data_test\nloop_\n"
+            "_pdbx_audit_revision_history.data_content_type\n"
+            "_pdbx_audit_revision_history.major_revision\n"
+            "_pdbx_audit_revision_history.minor_revision\n"
+            f"'Structure model' {major} {minor}\n"
+        ).encode()
+    )
+
+
+@pytest.mark.parametrize("offline", [False, True])
+def test_source_mmcif_falls_back_to_same_major_and_reuses_cache(
+    release_cache, source_manifest, monkeypatch, caplog, offline
+):
+    calls = []
+    monkeypatch.setattr(core_io.LOG, "propagate", True)
+
+    def get(url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            return _Response(b"", status_code=404)
+        return _Response(_revision_mmcif(1, 6))
+
+    monkeypatch.setattr(core_io.requests, "get", get)
+    path = core_io.get_pdb_mmcif("2y4i", manifest_path=source_manifest)
+
+    assert path == release_cache / "source_mmcifs" / "y4" / "2y4i_v1.cif.gz"
+    assert core_io._mmcif_revision(path) == (1, 6)
+    assert not core_io.pdb_mmcif_cache_path(
+        "2y4i", manifest_path=source_manifest
+    ).exists()
+    assert calls == [
+        "https://files-versioned.wwpdb.org/pdb_versioned/data/entries/"
+        "y4/pdb_00002y4i/pdb_00002y4i_xyz_v1-5.cif.gz",
+        "https://files-versioned.wwpdb.org/pdb_versioned/views/all/coordinates/mmcif/"
+        "y4/pdb_00002y4i/pdb_00002y4i_xyz_v1.cif.gz",
+    ]
+    assert "trying the latest minor revision" in caplog.text
+
+    monkeypatch.setattr(
+        core_io.requests, "get", lambda *args, **kwargs: pytest.fail("cache missed")
+    )
+    monkeypatch.setenv("PLINDER_OFFLINE", str(offline))
+    assert core_io.get_pdb_mmcif("2y4i", manifest_path=source_manifest) == path
+    if offline:
+        assert (
+            core_io.get_pdb_mmcif(
+                "2y4i", manifest_path=source_manifest, force_update=True
+            )
+            == path
+        )
+
+
+@pytest.mark.parametrize("actual_revision", [(2, 0), (1, 4)])
+def test_source_mmcif_rejects_incompatible_major_fallback(
+    release_cache, source_manifest, monkeypatch, actual_revision
+):
+    responses = [
+        _Response(b"", status_code=404),
+        _Response(_revision_mmcif(*actual_revision)),
+    ]
+    monkeypatch.setattr(
+        core_io.requests, "get", lambda *args, **kwargs: responses.pop(0)
+    )
+    with pytest.raises(ValueError, match="revision mismatch"):
+        core_io.get_pdb_mmcif("2y4i", manifest_path=source_manifest)
+    assert not list((release_cache / "source_mmcifs").rglob("*.cif.gz"))
+    assert not list((release_cache / "source_mmcifs").rglob("*.tmp"))
+
+
+def test_source_mmcif_force_update_refreshes_major_cache(
+    release_cache, source_manifest, monkeypatch
+):
+    cache = release_cache / "source_mmcifs" / "y4" / "2y4i_v1.cif.gz"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(_revision_mmcif(1, 6))
+    responses = [
+        _Response(b"", status_code=404),
+        _Response(_revision_mmcif(1, 7)),
+    ]
+    monkeypatch.setattr(
+        core_io.requests, "get", lambda *args, **kwargs: responses.pop(0)
+    )
+    assert (
+        core_io.get_pdb_mmcif("2y4i", manifest_path=source_manifest, force_update=True)
+        == cache
+    )
+    assert core_io._mmcif_revision(cache) == (1, 7)
+    assert responses == []
+
+
+def test_source_mmcif_prefers_exact_cache_over_major_cache(
+    release_cache, source_manifest, monkeypatch
+):
+    exact = core_io.pdb_mmcif_cache_path("2y4i", manifest_path=source_manifest)
+    exact.parent.mkdir(parents=True)
+    exact.write_bytes(_revision_mmcif(1, 5))
+    exact.with_name("2y4i_v1.cif.gz").write_bytes(_revision_mmcif(1, 6))
+    monkeypatch.setattr(
+        core_io.requests, "get", lambda *args, **kwargs: pytest.fail("cache missed")
+    )
+    assert core_io.get_pdb_mmcif("2y4i", manifest_path=source_manifest) == exact
 
 
 @pytest.mark.parametrize("value", ["", "../../etc/passwd", "not-a-pdb"])
