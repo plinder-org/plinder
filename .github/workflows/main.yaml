@@ -1,5 +1,6 @@
 name: Package
 permissions:
+  actions: write
   contents: write
   id-token: write
 on:
@@ -38,7 +39,7 @@ jobs:
         run: UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX" uv sync --inexact
       - name: Get version bump
         id: get-tag
-        run: echo "bump=$(python version.py)" >> $GITHUB_OUTPUT
+        run: echo "bump=$(python version.py)" >> "$GITHUB_OUTPUT"
       - name: Run tests
         if: steps.get-tag.outputs.bump != ''
         env:
@@ -55,6 +56,14 @@ jobs:
       - name: Save git tag
         if: steps.get-tag.outputs.bump != ''
         run: git push origin ${{ steps.get-tag.outputs.bump }}
+      # Tag pushes made with GITHUB_TOKEN do not trigger other workflows.
+      - name: Trigger documentation deployment
+        if: steps.get-tag.outputs.bump != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.get-tag.outputs.bump }}
+        run: gh workflow run docs.yaml --ref "$RELEASE_TAG"
       - name: Post coverage comment
         if: steps.get-tag.outputs.bump != ''
         uses: py-cov-action/python-coverage-comment-action@v3
