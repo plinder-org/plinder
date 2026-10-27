@@ -1007,6 +1007,35 @@ def test_greedy_set_cover_selects_the_largest_residual_gain():
     assert groups == [("broad-other", nodes)]
 
 
+@pytest.mark.parametrize("empty", [False, True])
+def test_cover_edge_sort_preserves_rows_across_target_ranges(tmp_path, empty):
+    import duckdb
+
+    from plinder.data.clusters import _write_target_sorted_edges
+
+    edges = pd.DataFrame(
+        {
+            "query_node": pd.Series([9, 2, 1, 7, 7, 3], dtype="uint32"),
+            "target_node": pd.Series(
+                [131072, 65536, 65535, 0, 0, 65536], dtype="uint32"
+            ),
+            "similarity": pd.Series([30, 100, 90, 50, 50, 70], dtype="uint8"),
+        }
+    )
+    if empty:
+        edges = edges.iloc[:0]
+    connection = duckdb.connect()
+    connection.register("edges", edges)
+    target = tmp_path / "sorted.parquet"
+    try:
+        _write_target_sorted_edges(connection, "SELECT * FROM edges", target, tmp_path)
+    finally:
+        connection.close()
+    expected = edges.sort_values(["target_node", "query_node"]).reset_index(drop=True)
+    pd.testing.assert_frame_equal(pd.read_parquet(target), expected)
+    assert not list(tmp_path.glob("cover-ranges-*"))
+
+
 def test_directed_cover_uses_query_to_centroid_scores_and_reassigns():
     from plinder.data.clusters import _greedy_directed_centroid_cover
 
@@ -1082,6 +1111,70 @@ def test_indexed_cover_components_preserve_assignments(primary_threshold, tmp_pa
     ) == sorted(
         (s.representative, s.threshold, s.marginal_gain) for s in global_result[0]
     )
+
+
+@pytest.mark.parametrize("fallback_scores", [(60, 80), (80, 60), (80, 80)])
+def test_indexed_cover_assigns_fallback_to_best_representative(
+    tmp_path, fallback_scores
+):
+    from plinder.data.clusters import (
+        _build_outgoing_edge_index,
+        _greedy_directed_set_cover,
+        _greedy_indexed_directed_set_cover,
+        _IncomingEdgeIndex,
+    )
+
+    nodes = ["a", "b", "strict-a", "strict-b", "relaxed"]
+    incoming = [
+        [(2, 90), (4, fallback_scores[0])],
+        [(3, 90), (4, fallback_scores[1])],
+        [],
+        [],
+        [],
+    ]
+    index = _IncomingEdgeIndex(
+        offsets=np.r_[0, np.cumsum([len(edges) for edges in incoming])],
+        queries=np.asarray(
+            [q for edges in incoming for q, _ in edges], dtype=np.uint32
+        ),
+        similarities=np.asarray(
+            [s for edges in incoming for _, s in edges], dtype=np.uint8
+        ),
+    )
+    graph = nk.Graph(len(nodes), weighted=True, directed=True)
+    for target, edges in enumerate(incoming):
+        for query, similarity in edges:
+            graph.addEdge(query, target, similarity / 100)
+    selections, representatives, similarities, thresholds = (
+        _greedy_indexed_directed_set_cover(
+            index,
+            nodes,
+            primary_threshold=90,
+            fallback_threshold=50,
+            primary_gains=np.asarray([2, 2, 1, 1, 1]),
+            fallback_gains=np.asarray([3, 3, 1, 1, 1]),
+            outgoing_index=_build_outgoing_edge_index(
+                index,
+                target_index_path=tmp_path / "targets.bin",
+                similarity_index_path=tmp_path / "scores.bin",
+            ),
+        )
+    )
+    expected_selections, expected_assignments = _greedy_directed_set_cover(
+        graph, nodes, primary_threshold=90, fallback_threshold=50
+    )
+    assert selections == expected_selections
+    np.testing.assert_array_equal(
+        representatives, [item.representative for item in expected_assignments]
+    )
+    np.testing.assert_allclose(
+        similarities, [item.similarity for item in expected_assignments]
+    )
+    np.testing.assert_array_equal(
+        thresholds, [item.threshold for item in expected_assignments]
+    )
+    assert similarities[4] == max(fallback_scores)
+    assert representatives[4] == (1 if fallback_scores[1] > fallback_scores[0] else 0)
 
 
 def test_indexed_cover_preserves_selected_centroids_in_perfect_ties(tmp_path):
