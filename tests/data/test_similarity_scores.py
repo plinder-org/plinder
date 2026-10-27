@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
+import biotite.structure as struc
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from biotite.structure.io.pdb import PDBFile
 from rdkit import Chem
 
 from plinder.core.scores.entries import (
@@ -791,6 +795,134 @@ def test_foldseek_cluster_target_is_also_used_for_conversion(
     assert "--cluster-search" in commands[0]
     assert commands[1][3] == str(tmp_path / "clustered")
     assert stream_options == [{"aln_type": "foldseek", "include_target_pdb_id": False}]
+
+
+@pytest.mark.skipif(
+    shutil.which("foldseek") is None, reason="Foldseek is not installed"
+)
+@pytest.mark.parametrize("clustered", [False, True])
+def test_foldseek_recomputes_lddt_from_reversed_traceback(
+    tmp_path, monkeypatch, clustered
+):
+    coordinates = [
+        [[0, 0, 0], [1, 0, 0], [20, 0, 0], [21, 0, 0], [22, 0, 0]],
+        [[0, 0, 0], [1, 0, 0], [10, 0, 0], [11, 0, 0], [12, 0, 0]],
+    ]
+    databases = []
+    for name, coords in zip(["query", "target"], coordinates, strict=True):
+        atoms = struc.AtomArray(5)
+        atoms.chain_id[:] = "A"
+        atoms.res_id = np.arange(1, 6)
+        atoms.res_name[:] = "ALA"
+        atoms.atom_name[:] = "CA"
+        atoms.element[:] = "C"
+        atoms.coord = np.array(coords, dtype=np.float32)
+        pdb = PDBFile()
+        pdb.set_structure(atoms)
+        source = tmp_path / f"{name}.pdb"
+        pdb.write(source)
+        database = tmp_path / name
+        sources = [str(source)]
+        if name == "target" and clustered:
+            copy = tmp_path / "target_copy.pdb"
+            shutil.copyfile(source, copy)
+            sources.append(str(copy))
+        subprocess.check_call(
+            ["foldseek", "createdb", *sources, str(database), "--threads", "1"],
+            stdout=subprocess.DEVNULL,
+        )
+        databases.append(database)
+
+    if clustered:
+        cluster_tsv = tmp_path / "clusters.tsv"
+        cluster_tsv.write_text("0\t0\n0\t1\n")
+        subprocess.check_call(
+            [
+                "foldseek",
+                "tsv2db",
+                str(cluster_tsv),
+                str(tmp_path / "clusters"),
+                "--output-dbtype",
+                "6",
+            ],
+            stdout=subprocess.DEVNULL,
+        )
+        target = tmp_path / "clustered"
+        subprocess.check_call(
+            [
+                "foldseek",
+                "createclusearchdb",
+                str(databases[1]),
+                str(tmp_path / "clusters"),
+                str(target),
+                "--threads",
+                "1",
+            ],
+            stdout=subprocess.DEVNULL,
+        )
+        databases[1] = target
+        subprocess.check_call(
+            [
+                "foldseek",
+                "createindex",
+                str(target),
+                str(tmp_path / "index_tmp"),
+                "--index-subset",
+                "2",
+                "--threads",
+                "1",
+            ],
+            stdout=subprocess.DEVNULL,
+        )
+
+    # Supply one fixed alignment instead of running a search. The distance
+    # changes only affect pairs outside the forward query's 15-Angstrom cutoff.
+    traceback = tmp_path / "traceback.tsv"
+    traceback.write_text(f"0\t{int(clustered)}\t100\t1.0\t1e-8\t0\t4\t5\t0\t4\t5\t5M\n")
+    check_call = subprocess.check_call
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if command[1] == "search":
+            command = [
+                "foldseek",
+                "tsv2db",
+                str(traceback),
+                command[4],
+                "--output-dbtype",
+                str(5 | (2 << 16)) if clustered else "5",
+            ]
+        return check_call(command, **kwargs)
+
+    monkeypatch.setattr(scoring_module.subprocess, "check_call", run)
+    run_alignment(
+        aln_type="foldseek",
+        query_db=databases[0],
+        target_db=databases[1],
+        search_target_db=databases[1],
+        search_db=tmp_path / "result",
+        aln_file=tmp_path / "forward",
+        reverse_aln_file=tmp_path / "reverse",
+        alignment_config=FoldseekConfig(),
+        tmp_dir=tmp_path / "scratch",
+        threads=1,
+    )
+
+    forward = pd.read_parquet(tmp_path / "forward.parquet")
+    reverse = pd.read_parquet(tmp_path / "reverse.parquet")
+    assert forward.loc[0, "lddt"] == pytest.approx(1.0)
+    assert reverse.loc[0, "lddt"] == pytest.approx(0.4)
+    assert forward.loc[0, "query"] == reverse.loc[0, "target"]
+    assert forward.loc[0, "target"] == reverse.loc[0, "query"]
+    assert [command[1] for command in commands] == [
+        "search",
+        "convertalis",
+        "swapresults",
+        "convertalis",
+    ]
+    assert not list(tmp_path.glob("result*"))
+    assert not (tmp_path / "reverse.tsv").exists()
 
 
 def test_alignment_tsv_is_streamed_to_query_partitions(tmp_path) -> None:

@@ -787,7 +787,8 @@ def test_plinder_entry_subset_rejects_foldseek(tmp_path):
         )
 
 
-def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
+@pytest.mark.parametrize("with_reverse", [False, True])
+def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path, with_reverse):
     input_root = tmp_path / "query_inputs"
     input_root.mkdir()
     chain_manifest = input_root / "query_chains.parquet"
@@ -832,7 +833,9 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
                 "pdb_00002def_xyz-enrich.cif.gz_OLD",
             ],
             "qstart": [1, 1],
+            "qend": [2, 2],
             "tstart": [2, 2],
+            "tend": [3, 3],
             "qcov": [0.8, 0.8],
             "fident": [0.5, 0.5],
             "qaln": ["AC", "AC"],
@@ -840,6 +843,34 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
             "lddt": [0.7, 0.7],
         }
     ).to_parquet(raw, index=False)
+    reverse_path = None
+    if with_reverse:
+        reverse_path = tmp_path / "reverse.parquet"
+        forward = pd.read_parquet(raw)
+        extra = forward.iloc[[0]].copy()
+        extra["qaln"] = "A-C"
+        extra["taln"] = "ACC"
+        extra["tend"] = 4
+        forward = pd.concat([forward, extra], ignore_index=True)
+        forward.to_parquet(raw, index=False)
+        reversed_hits = forward.rename(
+            columns={
+                "query": "target",
+                "target": "query",
+                "qstart": "tstart",
+                "tstart": "qstart",
+                "qend": "tend",
+                "tend": "qend",
+                "qaln": "taln",
+                "taln": "qaln",
+            }
+        )
+        reversed_hits["lddt"] = [0.6, 0.5, 0.4]
+        # Reversed results need not have the same order, and identical
+        # tracebacks may occur more than once.
+        pd.concat([reversed_hits.iloc[::-1], reversed_hits.iloc[[0]]]).to_parquet(
+            reverse_path, index=False
+        )
     lookup = tmp_path / "alignment_chain_lookup.parquet"
     pd.DataFrame(
         {
@@ -859,10 +890,11 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
         alignment_chain_lookup=lookup,
         output_path=output,
         exclude_target_entries={"2def"},
+        reverse_alignment=reverse_path,
     )
     result = pd.read_parquet(output)
 
-    assert len(result) == 1
+    assert len(result) == (2 if with_reverse else 1)
     assert result.loc[0, "query_chain_id"] == "model__A"
     assert result.loc[0, "target_entry"] == "1abc"
     assert result.loc[0, "target_chain_asym_id"] == "B"
@@ -870,6 +902,9 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
     assert result.loc[0, "query_sequence_source"] == "polymer"
     assert result.loc[0, "query_resolved_residue_numbers"].tolist() == [1, 2]
     assert result.loc[0, "target_selected_residue_numbers"].tolist() == [2, 4]
+    if with_reverse:
+        assert result["lddt"].tolist() == pytest.approx([0.7, 0.7])
+        assert result["reverse_lddt"].tolist() == pytest.approx([0.6, 0.4])
 
 
 def test_custom_search_defaults_keep_coverage_and_disable_identity_filter():
@@ -1079,6 +1114,7 @@ def test_prepare_custom_protein_score_alignments_reverses_direction(
     }
     if backend == "foldseek":
         row["lddt"] = 0.9
+        row["reverse_lddt"] = 0.8
     pd.DataFrame([row]).to_parquet(hit_path, index=False)
 
     outputs = custom.prepare_custom_protein_score_alignments(
@@ -1101,6 +1137,10 @@ def test_prepare_custom_protein_score_alignments_reverses_direction(
     assert result.loc[0, "selected_residue_identity_bits"] == b"\x01"
     assert result.loc[0, "fident_qcov"] == pytest.approx(0.75)
     assert "cigar" not in result
+    if backend == "foldseek":
+        assert result.loc[0, "lddt"] == pytest.approx(0.8)
+        assert result.loc[0, "lddt_qcov"] == pytest.approx(0.8 * 0.75)
+        assert "reverse_lddt" not in result
 
 
 def test_prepare_custom_score_alignments_maps_coordinate_fasta_positions(tmp_path):

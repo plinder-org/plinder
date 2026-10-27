@@ -1267,6 +1267,7 @@ def run_alignment(
     include_target_pdb_id: bool = True,
     query_ids_only: bool = False,
     id_column: str = "query",
+    reverse_aln_file: Path | None = None,
 ) -> set[str] | None:
     if id_column not in {"query", "target"}:
         raise ValueError(f"unsupported alignment ID column: {id_column}")
@@ -1373,6 +1374,50 @@ def run_alignment(
         str(threads),
     ]
     subprocess.check_call(convert_commands, stdout=subprocess.DEVNULL)
+
+    if reverse_aln_file is not None:
+        # A clustered Foldseek bundle keeps all expanded chains in *_seq.
+        reverse_query_db = Path(f"{conversion_target_db}_seq")
+        if not Path(f"{reverse_query_db}.dbtype").is_file():
+            reverse_query_db = conversion_target_db
+        reverse_db = search_db.parent / f"{search_db.name}_reverse"
+        subprocess.check_call(
+            [
+                aln_type,
+                "swapresults",
+                str(query_db),
+                str(reverse_query_db),
+                str(search_db),
+                str(reverse_db),
+                "-e",
+                "inf",
+                "--threads",
+                str(threads),
+            ],
+            stdout=subprocess.DEVNULL,
+        )
+        # swapresults retains NEED_SRC (bit 2 of the extended type), although
+        # the new target is the unclustered custom query DB. Foldseek 10's
+        # setextendeddbtype only adds bits, so clear it on this scratch DB.
+        dbtype_path = Path(f"{reverse_db}.dbtype")
+        dbtype = int.from_bytes(dbtype_path.read_bytes(), "little")
+        dbtype_path.write_bytes((dbtype & ~(2 << 16)).to_bytes(4, "little"))
+        reverse_commands = convert_commands.copy()
+        reverse_commands[2:6] = [
+            str(reverse_query_db),
+            str(query_db),
+            str(reverse_db),
+            str(reverse_aln_file.with_suffix(".tsv")),
+        ]
+        subprocess.check_call(reverse_commands, stdout=subprocess.DEVNULL)
+        _stream_alignment_tsv_to_dataset(
+            reverse_aln_file.with_suffix(".tsv"),
+            reverse_aln_file.with_suffix(".parquet"),
+            aln_type=aln_type,
+            include_target_pdb_id=include_target_pdb_id,
+        )
+        if remove_tmp:
+            reverse_aln_file.with_suffix(".tsv").unlink()
 
     query_ids = None
     if query_ids_only:
