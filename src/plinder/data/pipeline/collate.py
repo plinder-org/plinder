@@ -199,6 +199,7 @@ ENTRY_CHAIN_SCHEMA = pa.schema(
         ("chain_modified_residues", pa.list_(pa.string())),
         ("chain_length", pa.int64()),
         ("chain_num_unresolved_residues", pa.int64()),
+        ("chain_unresolved_fraction", pa.float64()),
         ("chain_is_holo", pa.bool_()),
         ("chain_is_ligand_like", pa.bool_()),
         ("chain_uniprot_ids", pa.list_(pa.string())),
@@ -863,6 +864,22 @@ def _relation_columns(
     return [str(row[1]) for row in rows]
 
 
+def _chain_unresolved_fraction_projection(columns: Sequence[str]) -> str:
+    """Derive missing completeness only; supplied values remain for validation."""
+    fraction = (
+        "CASE WHEN chain_length > 0 AND "
+        "chain_num_unresolved_residues BETWEEN 0 AND chain_length "
+        "THEN chain_num_unresolved_residues::DOUBLE / chain_length "
+        "ELSE NULL END"
+    )
+    if "chain_unresolved_fraction" in columns:
+        return (
+            "* REPLACE (coalesce(chain_unresolved_fraction, "
+            f"{fraction}) AS chain_unresolved_fraction)"
+        )
+    return f"*, {fraction} AS chain_unresolved_fraction"
+
+
 def _require_columns(
     columns: Iterable[str], required: Iterable[str], label: str
 ) -> None:
@@ -1500,6 +1517,17 @@ def _validate_final_tables(
                 )
             ),
         }
+        invalid_chain_metadata["incorrect_unresolved_fraction"] = int(
+            _fetch_scalar(
+                connection,
+                "SELECT count(*) FROM entry_chains WHERE "
+                "chain_unresolved_fraction IS DISTINCT FROM "
+                "CASE WHEN chain_length > 0 AND "
+                "chain_num_unresolved_residues BETWEEN 0 AND chain_length "
+                "THEN chain_num_unresolved_residues::DOUBLE / chain_length "
+                "ELSE NULL END",
+            )
+        )
         if any(invalid_chain_metadata.values()):
             raise ValueError(
                 f"invalid entry-chain sequence metadata: {invalid_chain_metadata}"
@@ -1992,6 +2020,7 @@ def repair_collation(
     }
 
     chain_annotations_changed = False
+    chain_completeness_backfilled = False
     try:
         for name, schema in SIDECAR_SCHEMAS.items():
             source_key = {
@@ -2085,8 +2114,32 @@ def repair_collation(
                 "entry_sources",
             ):
                 connection.read_parquet(str(final_paths[name])).create_view(
-                    f"installed_{name}", replace=True
+                    (
+                        "installed_entry_chains_raw"
+                        if name == "entry_chains"
+                        else f"installed_{name}"
+                    ),
+                    replace=True,
                 )
+                if name == "entry_chains":
+                    raw_columns = _relation_columns(
+                        connection, "installed_entry_chains_raw"
+                    )
+                    chain_completeness_backfilled = (
+                        "chain_unresolved_fraction" not in raw_columns
+                        or bool(
+                            _fetch_scalar(
+                                connection,
+                                "SELECT EXISTS (SELECT 1 FROM "
+                                "installed_entry_chains_raw WHERE "
+                                "chain_unresolved_fraction IS NULL)",
+                            )
+                        )
+                    )
+                    projection = _chain_unresolved_fraction_projection(raw_columns)
+                    connection.sql(
+                        f"SELECT {projection} FROM installed_entry_chains_raw"
+                    ).create_view("installed_entry_chains", replace=True)
                 connection.read_parquet(str(replacement_paths[name])).create_view(
                     f"replacement_{name}", replace=True
                 )
@@ -2112,24 +2165,32 @@ def repair_collation(
                         connection, name, columns
                     )
             replacements = ["entry_metadata", "interfaces"]
-            if chain_annotations_changed:
+            if chain_annotations_changed or chain_completeness_backfilled:
                 temporary_paths["entry_chains"] = _temporary_path(
                     final_paths["entry_chains"]
                 )
                 replacements.append("entry_chains")
             for name in replacements:
-                connection.read_parquet(str(final_paths[name])).create_view(
-                    f"installed_{name}", replace=True
-                )
+                # Keep the normalized chain view when publishing its backfill.
+                if name != "entry_chains":
+                    connection.read_parquet(str(final_paths[name])).create_view(
+                        f"installed_{name}", replace=True
+                    )
                 connection.read_parquet(str(replacement_paths[name])).create_view(
                     f"replacement_{name}", replace=True
                 )
+                query = (
+                    f"SELECT installed.* FROM installed_{name} AS installed"
+                    if name == "entry_chains" and not chain_annotations_changed
+                    else (
+                        f"SELECT * FROM (SELECT installed.* FROM installed_{name} "
+                        "AS installed ANTI JOIN repaired_entries USING (entry_pdb_id) "
+                        f"UNION ALL BY NAME SELECT * FROM replacement_{name})"
+                    )
+                )
                 _copy_query(
                     connection,
-                    f"SELECT * FROM (SELECT installed.* FROM installed_{name} "
-                    "AS installed ANTI JOIN repaired_entries USING (entry_pdb_id) "
-                    f"UNION ALL BY NAME SELECT * FROM replacement_{name}) "
-                    f"ORDER BY {ENTRY_TABLES[name][1]}",
+                    f"{query} ORDER BY {ENTRY_TABLES[name][1]}",
                     temporary_paths[name],
                     row_group_size=row_group_size,
                 )

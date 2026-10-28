@@ -76,6 +76,11 @@ def _combine_tables(
                 else "old_rows.entry_pdb_id = removed_entries.entry_pdb_id"
             )
             retained = f"SELECT old_rows.* FROM old_rows ANTI JOIN removed_entries ON {condition}"
+            if name == "entry_chains":
+                projection = collate._chain_unresolved_fraction_projection(
+                    connection.table("old_rows").columns
+                )
+                retained = f"SELECT {projection} FROM ({retained})"
             query = retained
             if incoming is not None:
                 connection.read_parquet(str(incoming / "index" / filename)).create_view(

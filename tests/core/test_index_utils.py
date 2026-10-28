@@ -170,3 +170,13 @@ def test_download_can_skip_large_artifact_groups(mock_cpl, monkeypatch):
     }
     assert requested
     assert large_paths.isdisjoint(requested)
+
+
+def test_bulk_download_supports_releases_without_score_store(mock_cpl, monkeypatch):
+    def track_path(**kwargs):
+        if kwargs["rel"] == "score_store":
+            raise FileNotFoundError("not repackaged yet")
+        return mock_path(**kwargs)
+
+    monkeypatch.setattr(utils.cpl, "get_plinder_path", track_path)
+    utils.download_plinder_cmd(args=["-y"])

@@ -299,6 +299,9 @@ def query_table(
     ``chain_sequence`` to include sequences automatically. When starting from
     ``entry_chains``, choose the cluster table with ``joins=[...]``; both
     cluster tables use the same representative column names.
+
+    Per-ligand ``ligand_validation_*`` and ``ligand_pocket_validation_*``
+    fields are read directly from ``annotation``; no system table is required.
     """
     if table_name not in RELEASE_TABLES:
         choices = ", ".join(sorted(RELEASE_TABLES))

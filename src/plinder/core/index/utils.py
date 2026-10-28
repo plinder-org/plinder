@@ -35,6 +35,7 @@ _DOWNLOAD_GROUPS = (
             "ligand_similarity_scores",
             "interface_similarity_scores",
             "interface_half_similarity_scores",
+            "score_store",
         ),
         True,
     ),
@@ -104,10 +105,15 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
                     f"bulk download cannot resolve parameterized artifact "
                     f"{artifact_name}"
                 )
-            cpl.get_plinder_path(
-                rel=artifact_path,
-                force_progress=large_download,
-            )
+            try:
+                cpl.get_plinder_path(
+                    rel=artifact_path,
+                    force_progress=large_download,
+                )
+            except FileNotFoundError:
+                if artifact_name != "score_store":
+                    raise
+                LOG.info("this release has no partitioned score exports yet")
 
     t1 = time()
     total = t1 - t0

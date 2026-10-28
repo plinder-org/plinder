@@ -159,11 +159,12 @@ class CustomScoringResult:
     aligned_pocket_residues: Path | None
     ligand_scores: Path | None
     interface_scores: Path | None
+    interface_side_scores: Path | None = None
 
 
 @dataclass(frozen=True)
 class CustomSequenceScoringResult:
-    """Files produced by protein-sequence scoring against PLINDER pockets."""
+    """Files produced by protein-sequence search and binding-site discovery."""
 
     query_inputs: CustomQueryInputs
     query_databases: CustomQueryDatabases
@@ -174,6 +175,7 @@ class CustomSequenceScoringResult:
     aligned_pocket_residues: Path | None
     sequence_links: Path
     best_sequence_links: Path
+    interface_side_scores: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -2804,8 +2806,9 @@ def score_custom_sequence_file(
     threads: int = 1,
     store_aligned_pocket_residues: bool = False,
     include_monomers: bool = False,
+    include_interfaces: bool = True,
 ) -> CustomSequenceScoringResult:
-    """Search protein sequences and score PLINDER ligand-pocket identity.
+    """Search protein sequences and map known pockets and interface sites.
 
     ``plinder_entry_ids`` builds a small MMseqs target from the scoreable
     receptor and interface chains in the selected release entries instead of
@@ -2911,6 +2914,16 @@ def score_custom_sequence_file(
         output_path=work_dir / "sequence_links.parquet",
         best_output_path=work_dir / "best_sequence_links.parquet",
     )
+    interface_side_path = (
+        work_dir / "interface_side_scores.parquet" if include_interfaces else None
+    )
+    if interface_side_path is not None:
+        calculate_custom_interface_side_scores(
+            protein_score_alignments,
+            assets=assets,
+            output_path=interface_side_path,
+            chain_manifest=query_inputs.chain_manifest,
+        )
     return CustomSequenceScoringResult(
         query_inputs=query_inputs,
         query_databases=query_databases,
@@ -2921,6 +2934,7 @@ def score_custom_sequence_file(
         aligned_pocket_residues=aligned_pocket_residue_path,
         sequence_links=sequence_links,
         best_sequence_links=best_sequence_links,
+        interface_side_scores=interface_side_path,
     )
 
 
@@ -3011,6 +3025,47 @@ def calculate_custom_similarity_scores(
         output_path = Path(output_path)
         output_path.parent.mkdir(exist_ok=True, parents=True)
         result.to_parquet(output_path, index=False, compression="zstd")
+    return result
+
+
+def calculate_custom_interface_side_scores(
+    protein_score_alignments: Mapping[str, Path],
+    *,
+    assets: CustomScoringAssets,
+    output_path: Path,
+    chain_manifest: Path | None = None,
+) -> pd.DataFrame:
+    """Discover known interface sites on custom structures or FASTA sequences."""
+    from plinder.core.scores.interface import calculate_interface_side_scores
+
+    entries = _load_release_entry_views(
+        assets, pdb_ids=_query_entry_ids(protein_score_alignments)
+    )
+    frames = [pd.read_parquet(path) for path in protein_score_alignments.values()]
+    result = calculate_interface_side_scores(
+        pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(),
+        interfaces={
+            interface.id: interface
+            for entry in entries.values()
+            for interface in entry.interfaces.values()
+        },
+    )
+    if chain_manifest is not None:
+        identifiers = pd.read_parquet(
+            chain_manifest, columns=["structure_id", "sequence_id"]
+        ).drop_duplicates()
+        result = result.merge(
+            identifiers,
+            left_on="custom_structure_id",
+            right_on="structure_id",
+            how="left",
+            validate="many_to_one",
+        ).drop(columns="structure_id")
+        if result["sequence_id"].isna().any():
+            raise ValueError("interface-side hits reference unknown FASTA sequences")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    result.to_parquet(output_path, index=False, compression="zstd")
     return result
 
 
@@ -3106,9 +3161,12 @@ def score_custom_cif_files(
     scores use each PLINDER ligand pocket as the directed query and each
     custom protein chain as a ligand-free target, so ``include_ligands=False``
     still yields protein metrics and ``pocket_fident``. Passing ``None`` for
-    ligand or interface inclusion annotates that feature and emits its score
-    table only when the custom structures contain a proper ligand or protein
-    interface, respectively. ``plinder_entry_ids`` builds a small MMseqs target
+    ligand inclusion annotates that feature and emits its score table only
+    when the custom structures contain a proper ligand. Interface-site scores
+    map known sites onto each custom chain, even without a binding partner;
+    complete-interface scores require an interface in the custom structure.
+    Set ``include_interfaces=False`` to skip both interface outputs.
+    ``plinder_entry_ids`` builds a small MMseqs target
     from scoreable receptor and interface chains in selected release entries
     rather than fetching the complete search database; this bounded mode
     currently requires ``backends=("mmseqs",)``.
@@ -3245,8 +3303,21 @@ def score_custom_cif_files(
     score_interfaces = include_interfaces is True or (
         include_interfaces is None and has_interfaces
     )
+    interface_side_path = (
+        work_dir / "interface_side_scores.parquet"
+        if include_interfaces is not False
+        else None
+    )
+    if interface_side_path is not None:
+        calculate_custom_interface_side_scores(
+            protein_score_alignments,
+            assets=assets,
+            output_path=interface_side_path,
+        )
     interface_score_path = (
-        work_dir / "interface_scores.parquet" if score_interfaces else None
+        work_dir / "interface_scores.parquet"
+        if score_interfaces and has_interfaces
+        else None
     )
     if interface_score_path is not None:
         calculate_custom_interface_similarity_scores(
@@ -3267,4 +3338,5 @@ def score_custom_cif_files(
         aligned_pocket_residues=aligned_pocket_residue_path,
         ligand_scores=ligand_score_path,
         interface_scores=interface_score_path,
+        interface_side_scores=interface_side_path,
     )

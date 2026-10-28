@@ -83,6 +83,55 @@ group. APIs fetch missing optional files when they need them unless offline
 mode is enabled. Source PDB mmCIFs are separate: they are fetched per PDB entry
 during reconstruction and are not part of the bulk download.
 
+### Selective score downloads
+
+Releases with a `score_store/<artifact>/manifest.json` support downloading
+only the score shards needed by a query. The score-query APIs and columns
+are unchanged. For example, filter on `query_ligand_id`, `query_system`,
+`query_half_interface_id`, or `query_entry` using `==` or `in` to select
+query shards. Chemical ligand scores use numeric ligand-ID ranges.
+Row order is not guaranteed; sort the result explicitly when order matters.
+
+Target-only equality and membership queries use an exact target-to-shard
+index. Scores remain directed: a target lookup does not substitute the
+reverse pair's score. Queries with only a score threshold, or many widely
+distributed IDs, can still need most of the release. Column projection
+reduces local reads, but whole selected shard files are downloaded.
+
+The client checks for this manifest before fetching score data. Until the
+new exports are published, it reads the existing release layout, which
+can require a large first download. A missing shard in a manifest-backed
+release is an error, not a reason to silently download a legacy table.
+Offline use requires the manifest and every shard needed by the query.
+
+Release maintainers can repackage finalized scores without recomputing
+them or changing the source files:
+
+```bash
+python -m plinder.data.pipeline.score_store WORKING_RELEASE STAGING_RELEASE \
+    --threads 2 --memory-limit 2GB
+```
+
+Run this release-wide operation on a compute node with adequate temporary
+disk space. It writes only `STAGING_RELEASE/score_store/`, refuses to
+overwrite an existing artifact, and installs each artifact atomically.
+The memory limit controls the engine's working-memory budget, not total
+process RAM; allow additional headroom and disk space for external sorts.
+Each query bucket is sorted in a fresh engine session. Target-routing
+indices are deduplicated per query bucket and finalized in eight groups,
+without a release-wide in-memory sort or deduplication.
+Exports retain all rows (including duplicate rows), original columns and
+types, and directionality. Each bucket is sorted and checked using row
+counts and order-independent row fingerprints. The manifest records the
+total row count, schema, fingerprint, and all data/index file paths.
+
+For deployment, place the completed `score_store/` beside the other finalized
+artifacts in a separate working release tree, then run
+`plinder_prepare_release` as usual. The public-release allowlist includes
+only completed, manifest-listed score-store files. Keep the existing score
+artifacts for older clients. Publishing the new files is a separate step;
+running the exporter never uploads anything.
+
 (annotation-table-target)=
 (annotation-tables-index)=
 
@@ -96,10 +145,14 @@ chain, validation, cluster, and representative data so clients only load it
 when needed. `query_table()` can request columns across related tables in a
 single query and selects the required relationships from those columns.
 
-- `annotation`: ligand annotations and reconstructable system IDs;
+- `annotation`: ligand annotations and reconstructable system IDs, including
+  `ligand_validation_*` for that ligand's own residues (all members of a
+  multi-chain covalent ligand) and `ligand_pocket_validation_*` for its own
+  neighboring receptor residues;
 - `system_validation`: ligand and pocket validation summaries for each
   system;
-- `entry_chains`: one polymer chain in a PDB entry;
+- `entry_chains`: one polymer chain in a PDB entry, including
+  `chain_unresolved_fraction` (unresolved residues / SEQRES length, from 0 to 1);
 - `entry_biounit_chains`: one chain instance in a biological assembly;
 - `entry_metadata`: experimental and entry-validation metadata;
 - `entry_sources`: the source mmCIF revision used for the release;
@@ -124,6 +177,28 @@ single query and selects the required relationships from those columns.
 - `interface_representatives`: representative full interfaces;
 - `interface_half_representatives`: representative interface sides;
 - `interface_clusters`: protein-interface cover labels.
+
+Per-ligand validation is available directly through `query_table()` without
+loading or joining system summaries:
+
+```python
+from plinder.core import query_table
+
+ligands = query_table(
+    "annotation",
+    columns=[
+        "ligand_id",
+        "ligand_validation_average_rscc",
+        "ligand_validation_average_rsr",
+        "ligand_pocket_validation_average_rscc",
+    ],
+    filters=[("ligand_validation_average_rscc", ">=", 0.8)],
+)
+```
+
+Use these per-ligand values to compare ligand copies. Optional system-level
+summaries are available as `system_ligand_validation_*` and
+`system_pocket_validation_*` columns.
 
 The checked-in column reference below is generated from these release tables.
 

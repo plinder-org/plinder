@@ -328,6 +328,40 @@ def test_requested_entry_metadata_is_joined_automatically(
     assert pd.isna(result["entry_resolution"].iloc[2])
 
 
+def test_per_ligand_validation_needs_no_system_table(tmp_path: Path) -> None:
+    release = PlinderRelease(tmp_path)
+    _write_table(
+        release,
+        "annotation_table",
+        {
+            "ligand_id": ["9hb7__1__1.F", "9hb7__1__1.E"],
+            "ligand_ccd_code": ["JCR", "FE"],
+            "ligand_validation_average_rscc": [0.852, 0.984],
+            "ligand_pocket_validation_average_rscc": [0.91, None],
+        },
+    )
+    result = query_table(
+        columns=[
+            "ligand_id",
+            "ligand_validation_average_rscc",
+            "ligand_pocket_validation_average_rscc",
+        ],
+        filters=[
+            ("ligand_ccd_code", "==", "JCR"),
+            ("ligand_validation_average_rscc", ">=", 0.8),
+        ],
+        release=release,
+    )
+    assert result.to_dict("records") == [
+        {
+            "ligand_id": "9hb7__1__1.F",
+            "ligand_validation_average_rscc": 0.852,
+            "ligand_pocket_validation_average_rscc": 0.91,
+        }
+    ]
+    assert not release.path("system_validation").exists()
+
+
 def test_requested_system_validation_is_joined_automatically(
     local_release: PlinderRelease,
 ) -> None:
