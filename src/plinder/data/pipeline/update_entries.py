@@ -77,21 +77,9 @@ def _combine_tables(
             )
             retained = f"SELECT old_rows.* FROM old_rows ANTI JOIN removed_entries ON {condition}"
             if name == "entry_chains":
-                # Completeness is derived from existing counts. Fill only
-                # missing values; keep supplied values for final validation.
-                fraction = (
-                    "CASE WHEN chain_length > 0 AND "
-                    "chain_num_unresolved_residues BETWEEN 0 AND chain_length "
-                    "THEN chain_num_unresolved_residues::DOUBLE / chain_length "
-                    "ELSE NULL END"
+                projection = collate._chain_unresolved_fraction_projection(
+                    connection.table("old_rows").columns
                 )
-                if "chain_unresolved_fraction" in connection.table("old_rows").columns:
-                    projection = (
-                        "* REPLACE (coalesce(chain_unresolved_fraction, "
-                        f"{fraction}) AS chain_unresolved_fraction)"
-                    )
-                else:
-                    projection = f"*, {fraction} AS chain_unresolved_fraction"
                 retained = f"SELECT {projection} FROM ({retained})"
             query = retained
             if incoming is not None:

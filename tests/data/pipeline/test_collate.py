@@ -1266,15 +1266,28 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
     assert finalized_report["downstream_repair_complete"] is True
 
 
-def test_targeted_repair_updates_chain_annotations(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fraction_column", ["present", "absent", "null"])
+def test_targeted_repair_updates_chain_annotations(
+    tmp_path: Path, fraction_column: str
+) -> None:
     _write_release(tmp_path)
     run_collation(tmp_path, memory_limit="1GB")
     path = tmp_path / "index/entry_chains.parquet"
     installed = pd.read_parquet(path)
     installed["release_only"] = "keep"
+    installed.loc[installed.chain_asym_id.eq("A"), "chain_num_unresolved_residues"] = 30
+    installed["chain_unresolved_fraction"] = (
+        installed.chain_num_unresolved_residues / installed.chain_length
+    )
+    if fraction_column == "absent":
+        installed = installed.drop(columns="chain_unresolved_fraction")
+    elif fraction_column == "null":
+        installed["chain_unresolved_fraction"] = None
     installed.to_parquet(path, index=False)
     replacement_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
     replacement = pd.read_parquet(replacement_path)
+    replacement.loc[0, "chain_num_unresolved_residues"] = 30
+    replacement.loc[0, "chain_unresolved_fraction"] = 0.1
     replacement.loc[0, "chain_sequence_noncanonical"] = "(MSE)" + "A" * 299
     replacement.at[0, "chain_modified_residues"] = ["1:MSE:A:1"]
     replacement.to_parquet(replacement_path, index=False)
@@ -1310,10 +1323,65 @@ def test_targeted_repair_updates_chain_annotations(tmp_path: Path) -> None:
     selected = repaired.loc[repaired.entry_pdb_id.eq("1abc"), replacement.columns]
     pd.testing.assert_frame_equal(selected.reset_index(drop=True), replacement)
     untouched = repaired.loc[repaired.entry_pdb_id.eq("2def"), installed.columns]
+    if fraction_column == "null":
+        installed["chain_unresolved_fraction"] = (
+            installed.chain_num_unresolved_residues / installed.chain_length
+        )
     pd.testing.assert_frame_equal(
         untouched.reset_index(drop=True),
         installed.loc[installed.entry_pdb_id.eq("2def")].reset_index(drop=True),
     )
+    assert repaired["chain_unresolved_fraction"].tolist() == [0.1, 0.0] * 2
+
+
+@pytest.mark.parametrize("fraction_column", ["absent", "null"])
+def test_metadata_only_repair_derives_missing_chain_fraction(
+    tmp_path: Path, fraction_column: str
+) -> None:
+    _write_release(tmp_path)
+    run_collation(tmp_path, memory_limit="1GB")
+    chain_path = tmp_path / "index/entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    retained = chains.entry_pdb_id.eq("2def") & chains.chain_asym_id.eq("A")
+    chains.loc[retained, "chain_num_unresolved_residues"] = 60
+    chains["release_only"] = "keep"
+    if fraction_column == "absent":
+        chains = chains.drop(columns="chain_unresolved_fraction")
+    else:
+        chains.loc[retained, "chain_unresolved_fraction"] = None
+    chains.to_parquet(chain_path, index=False)
+    metadata_path = tmp_path / "raw_entries/ab/1abc/entry_metadata.parquet"
+    metadata = pd.read_parquet(metadata_path)
+    metadata["entry_pH"] = 6.5
+    metadata.to_parquet(metadata_path, index=False)
+
+    report = repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
+
+    assert report["status"] == "requires_downstream_repair"
+    repaired = pd.read_parquet(chain_path)
+    assert repaired["chain_unresolved_fraction"].tolist() == [0.0, 0.0, 0.2, 0.0]
+    assert repaired["release_only"].tolist() == ["keep"] * len(chains)
+    repaired_metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
+    assert repaired_metadata.set_index("entry_pdb_id").loc["1abc", "entry_pH"] == 6.5
+
+
+@pytest.mark.parametrize("supplied_fraction", [0.25, -0.1, 1.1])
+def test_targeted_repair_rejects_incorrect_retained_chain_fraction(
+    tmp_path: Path, supplied_fraction: float
+) -> None:
+    _write_release(tmp_path)
+    run_collation(tmp_path, memory_limit="1GB")
+    path = tmp_path / "index/entry_chains.parquet"
+    chains = pd.read_parquet(path)
+    retained = chains.entry_pdb_id.eq("2def") & chains.chain_asym_id.eq("A")
+    chains.loc[retained, "chain_unresolved_fraction"] = supplied_fraction
+    chains.to_parquet(path, index=False)
+    before = _index_bytes(tmp_path)
+
+    with pytest.raises(ValueError, match="incorrect_unresolved_fraction"):
+        repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
+
+    assert _index_bytes(tmp_path) == before
 
 
 @pytest.mark.parametrize(
