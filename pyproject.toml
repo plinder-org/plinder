@@ -2,7 +2,7 @@
 name = "plinder"
 dynamic = ["version"]
 dependencies = [
-    "biotite >= 1.2",
+    "biotite >= 1.2, < 2",
     "numpy",
     "threadpoolctl>=3.6",
     "pandas",
