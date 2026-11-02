@@ -175,6 +175,11 @@ for each side, the number of contacting residue pairs, and PRODIGY-cryst
 features. Full deposited sequences and source taxonomies are in the chain and
 entry tables.
 
+Interfaces require at least seven contacting residues per side by default and
+at least one known residue in each chain. Near-coincident assembly copies are
+removed; pairs with at least ten backbone-clashing residues per side within
+1.5 Å are excluded while their chains remain available for other interfaces.
+
 `interface_representatives` stores the full-interface representatives,
 while `interface_half_representatives` stores individual interface
 sides. The latter is useful when one wants diverse protein surfaces without

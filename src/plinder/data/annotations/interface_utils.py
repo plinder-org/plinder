@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 PROTEIN_BACKBONE_ATOMS = frozenset({"N", "CA", "C", "O"})
 DEFAULT_MIN_INTERFACE_RESIDUES = 7
+BACKBONE_CLASH_DISTANCE = 1.5
+MIN_BACKBONE_CLASH_RESIDUES = 10
 MIN_INTERFACE_RESIDUES_METADATA_KEY = b"plinder.interface.min_interface_residues"
 PRODIGY_CONTACT_RADIUS = 5.0
 ProteinChainContacts = dict[tuple[str, str], set[tuple[int, int]]]
@@ -400,6 +402,18 @@ def find_protein_chain_contacts(
     }
     if len(protein_chains) < 2:
         return {}
+    return _backbone_residue_contacts(
+        atoms, protein_chains, contact_radius, spatial_index
+    )
+
+
+def _backbone_residue_contacts(
+    atoms: struc.AtomArray,
+    protein_chains: set[str],
+    radius: float,
+    spatial_index: BiounitSpatialIndex,
+) -> ProteinChainContacts:
+    """Collect backbone residue pairs using the assembly's spatial index."""
 
     protein_backbone = np.fromiter(
         (
@@ -413,9 +427,7 @@ def find_protein_chain_contacts(
     contacts: ProteinChainContacts = {}
     for atom_index in np.flatnonzero(protein_backbone):
         neighbors = np.asarray(
-            spatial_index.cell_list.get_atoms(
-                atoms.coord[atom_index], radius=contact_radius
-            ),
+            spatial_index.cell_list.get_atoms(atoms.coord[atom_index], radius=radius),
             dtype=int,
         ).reshape(-1)
         neighbors = neighbors[(neighbors > atom_index) & (neighbors < len(atoms))]
@@ -458,7 +470,10 @@ def detect_protein_interfaces(
     ``N``, ``CA``, ``C`` or ``O`` atoms lies within ``contact_radius`` of a
     backbone atom in another eligible assembly-chain instance.  Interfaces
     are retained only when both sides contain at least
-    ``min_interface_residues`` resolved residues.
+    ``min_interface_residues`` resolved residues and neither chain is modeled
+    entirely as ``UNK``. Pairs with at least ten distinct residues on each
+    side involved in backbone clashes within 1.5 Å are excluded; their chains
+    remain available for other interfaces and for protein-contact counts.
 
     ``chain_pair_contact_areas`` are the assembly-wide Voronota-LT areas keyed
     by sorted chain pair; when given, each interface records its pair's area
@@ -478,12 +493,19 @@ def detect_protein_interfaces(
             "interface contact radius exceeds the biological-assembly index radius"
         )
 
+    known_backbone_chains = set(
+        atoms.chain_id[
+            np.isin(atoms.atom_name, list(PROTEIN_BACKBONE_ATOMS))
+            & (atoms.res_name != "UNK")
+        ]
+    )
     eligible_chains = {
         instance_chain
         for instance_chain in spatial_index.chain_ids
         if (chain := chains.get(_asym_id(instance_chain))) is not None
         and "polypeptide" in chain.chain_type_str.lower()
         and chain.length >= min_chain_length
+        and instance_chain in known_backbone_chains
     }
     if len(eligible_chains) < 2:
         return []
@@ -498,10 +520,24 @@ def detect_protein_interfaces(
         if chain_contacts is None
         else chain_contacts
     )
+    clashes = _backbone_residue_contacts(
+        atoms,
+        eligible_chains,
+        min(BACKBONE_CLASH_DISTANCE, contact_radius),
+        spatial_index,
+    )
+    clashing_pairs = {
+        pair
+        for pair, residues in clashes.items()
+        if len({left for left, _ in residues}) >= MIN_BACKBONE_CLASH_RESIDUES
+        and len({right for _, right in residues}) >= MIN_BACKBONE_CLASH_RESIDUES
+    }
 
     interfaces: list[ProteinInterface] = []
     for (chain_1, chain_2), residue_pairs in sorted(contacts.items()):
         if chain_1 not in eligible_chains or chain_2 not in eligible_chains:
+            continue
+        if (chain_1, chain_2) in clashing_pairs:
             continue
         chain_1_numbers, chain_1_indices = _residue_mappings(
             instance_chain=chain_1,
