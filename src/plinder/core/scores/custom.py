@@ -1373,11 +1373,34 @@ def map_custom_alignment_hits(
     alignment_chain_lookup: Path,
     output_path: Path,
     exclude_target_entries: Iterable[str] = (),
+    reverse_alignment: Path | None = None,
 ) -> Path:
     """Replace backend identifiers with custom and PLINDER label-asym IDs."""
     if backend not in SEARCH_BACKENDS:
         raise ValueError(f"unsupported search backend: {backend}")
     raw = pd.read_parquet(raw_alignment)
+    if reverse_alignment is not None and not raw.empty:
+        keys = ["query", "target", "qstart", "qend", "tstart", "tend", "qaln", "taln"]
+        reverse_keys = [
+            "target",
+            "query",
+            "tstart",
+            "tend",
+            "qstart",
+            "qend",
+            "taln",
+            "qaln",
+        ]
+        reverse = pd.read_parquet(reverse_alignment, columns=keys + ["lddt"])
+        reverse = reverse.rename(
+            columns=dict(zip(keys, reverse_keys, strict=True))
+            | {"lddt": "reverse_lddt"}
+        )
+        raw = raw.merge(
+            reverse.drop_duplicates(), on=keys, how="left", validate="many_to_one"
+        )
+        if raw["reverse_lddt"].isna().any():
+            raise ValueError("Foldseek hits are missing reverse lDDT scores")
     excluded = {str(entry).lower() for entry in exclude_target_entries}
     if excluded and not raw.empty:
         target_entries = {
@@ -1943,14 +1966,18 @@ def prepare_custom_protein_score_alignments(
         hits["fident_qcov"] = hits["fident"] * hits["qcov"]
         hits["seqsim_qcov"] = hits["seqsim"] * hits["qcov"]
         if backend == "foldseek":
-            if "lddt" not in hits:
-                raise ValueError("foldseek custom hit table is missing column lddt")
+            if "reverse_lddt" not in hits:
+                raise ValueError(
+                    "foldseek custom hit table is missing column reverse_lddt"
+                )
+            hits["lddt"] = hits["reverse_lddt"]
             hits["lddt_qcov"] = hits["lddt"] * hits["qcov"]
         hits = hits.drop(
             columns=[
                 "qaln",
                 "taln",
                 "cigar",
+                "reverse_lddt",
                 "target_selected_residue_indices",
             ],
             errors="ignore",
@@ -2030,6 +2057,11 @@ def run_custom_protein_searches(
             raw_prefix = raw_root / (
                 backend if label == "base" else f"{backend}_{label}"
             )
+            reverse_prefix = (
+                raw_root / f"{raw_prefix.name}_reverse"
+                if backend == "foldseek"
+                else None
+            )
             search_config = alignment_config
             if label == "base" and assets.shadowed_entries:
                 lookup = Path(f"{bundle.search_target}.lookup")
@@ -2058,6 +2090,7 @@ def run_custom_protein_searches(
                 tmp_dir=backend_scratch / f"tmp_{label}",
                 remove_tmp=True,
                 threads=threads,
+                reverse_aln_file=reverse_prefix,
             )
             mapped = output_dir / f"{backend}_{label}.parquet" if combine else output
             map_custom_alignment_hits(
@@ -2068,6 +2101,11 @@ def run_custom_protein_searches(
                 output_path=mapped,
                 exclude_target_entries=(
                     assets.shadowed_entries if label == "base" else ()
+                ),
+                reverse_alignment=(
+                    reverse_prefix.with_suffix(".parquet")
+                    if reverse_prefix is not None
+                    else None
                 ),
             )
             if combine:
